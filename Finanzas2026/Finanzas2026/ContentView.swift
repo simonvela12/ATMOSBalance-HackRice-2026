@@ -217,6 +217,7 @@ struct ContentView: View {
         .sheet(isPresented: $showingCalendar) {
             CalendarForecastSheet(
                 month: month,
+                goals: currentGoals,
                 onRename: renameEntry,
                 onDelete: deleteEntry
             )
@@ -287,7 +288,7 @@ struct ContentView: View {
 
             HStack(spacing: 5) {
                 Text("\(spendableBalance.currencyText) spendable")
-                    .font(.helvetica(.subheadline, weight: .semibold))
+                    .font(.helvetica(.headline, weight: .semibold))
                     .monospacedDigit()
                 Button {
                     showingSpendableDetails = true
@@ -1930,6 +1931,7 @@ private struct ScenarioMetric: View {
 
 private struct CalendarForecastSheet: View {
     let month: MonthForecast
+    let goals: [FinancialGoal]
     let onRename: (ForecastEntryTarget, String, OccurrenceScope) -> Void
     let onDelete: (ForecastEntryTarget, OccurrenceScope) -> Void
     @State private var selectedDay: ForecastDay?
@@ -1946,6 +1948,22 @@ private struct CalendarForecastSheet: View {
 
     private var monthlyNet: Double {
         month.days.reduce(0) { $0 + $1.amount }
+    }
+
+    private func goals(on day: ForecastDay) -> [FinancialGoal] {
+        var components = DateComponents()
+        components.calendar = Calendar(identifier: .gregorian)
+        components.year = month.month.year
+        components.month = month.month.monthNumber
+        components.day = day.day
+        guard let date = components.date else { return [] }
+
+        return goals
+            .filter { Calendar.current.isDate($0.targetDate, inSameDayAs: date) }
+            .sorted {
+                if $0.priority.rank == $1.priority.rank { return $0.name < $1.name }
+                return $0.priority.rank < $1.priority.rank
+            }
     }
 
     var body: some View {
@@ -1970,7 +1988,7 @@ private struct CalendarForecastSheet: View {
 
                         ForEach(month.days) { day in
                             Button { selectedDay = day } label: {
-                                CalendarDayCell(day: day)
+                                CalendarDayCell(day: day, goals: goals(on: day))
                             }
                             .buttonStyle(.plain)
                         }
@@ -1983,7 +2001,7 @@ private struct CalendarForecastSheet: View {
                     HStack(spacing: 7) {
                         Image(systemName: monthlyNet >= 0 ? "arrow.up.right" : "arrow.down.right")
                         Text("Monthly net")
-                        Text(monthlyNet.signedCurrencyText)
+                        Text(monthlyNet.signedCalendarCurrencyText)
                             .fontWeight(.bold)
                             .monospacedDigit()
                     }
@@ -2012,32 +2030,62 @@ private struct CalendarForecastSheet: View {
 
 private struct CalendarDayCell: View {
     let day: ForecastDay
+    let goals: [FinancialGoal]
+
+    private var visibleGoals: [FinancialGoal] {
+        Array(goals.prefix(goals.count > 2 ? 2 : goals.count))
+    }
+
+    private var goalIconSize: CGFloat {
+        goals.count <= 1 ? 13 : 9
+    }
 
     var body: some View {
-        VStack(spacing: 5) {
-            Text("\(day.day)")
-                .font(.helvetica(.caption, weight: day.status == .today ? .bold : .medium))
+        VStack(spacing: 4) {
+            HStack(spacing: 2) {
+                Text("\(day.day)")
+                    .font(.helvetica(.caption, weight: day.status == .today ? .bold : .medium))
+                Spacer(minLength: 1)
+                ForEach(visibleGoals) { goal in
+                    Image(systemName: goal.symbol)
+                        .font(.system(size: goalIconSize, weight: .semibold))
+                        .foregroundStyle(Color.rainMist)
+                }
+                if goals.count > visibleGoals.count {
+                    Text("+\(goals.count - visibleGoals.count)")
+                        .font(.helvetica(size: 7, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 14)
+
             if day.amount != 0 {
                 Image(systemName: day.weather.symbol)
                     .font(.system(size: 15))
                     .symbolRenderingMode(.palette)
                     .foregroundStyle(day.weather.primaryColor, day.weather.secondaryColor)
-                Text(day.formattedAmount)
+                Text(day.amount.signedCalendarCurrencyText)
                     .font(.helvetica(.caption2, weight: .semibold))
-                    .minimumScaleFactor(0.65)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.35)
+                    .allowsTightening(true)
+                    .frame(maxWidth: .infinity)
             } else {
-                Spacer().frame(height: 27)
+                Spacer().frame(height: 26)
                 Text("—").font(.helvetica(.caption2)).foregroundStyle(.white.opacity(0.28))
             }
         }
+        .padding(.horizontal, 3)
         .foregroundStyle(.white)
-        .frame(maxWidth: .infinity, minHeight: 70)
+        .frame(maxWidth: .infinity, minHeight: 72)
         .background(day.status == .today ? Color.sunGold.opacity(0.18) : .white.opacity(day.amount == 0 ? 0.035 : 0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay {
             if day.status == .today {
                 RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.sunGold.opacity(0.65))
             }
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityHint(goals.isEmpty ? "" : "Goal deadline")
     }
 }
 
@@ -3457,6 +3505,15 @@ private extension Double {
         if self > 0 { return "+\(currencyText)" }
         if self < 0 { return "−\(abs(self).currencyText)" }
         return 0.0.currencyText
+    }
+
+    var signedCalendarCurrencyText: String {
+        let wholeDollarText = abs(self).formatted(
+            .currency(code: "USD").precision(.fractionLength(0))
+        )
+        if self > 0 { return "+\(wholeDollarText)" }
+        if self < 0 { return "−\(wholeDollarText)" }
+        return 0.0.formatted(.currency(code: "USD").precision(.fractionLength(0)))
     }
 
     var negativeCurrencyText: String {
