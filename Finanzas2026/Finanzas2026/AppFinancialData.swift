@@ -141,6 +141,12 @@ enum SavingsAccrual {
         let id: UUID
         let remaining: Double
         let deadline: Date
+        let priority: GoalPriority
+        let flexibility: GoalFlexibility
+
+        var protectionScore: Double {
+            priority.weight * flexibility.protectionWeight
+        }
     }
 
     /// Spreads what was saved across goals, earliest deadline first, never giving
@@ -149,7 +155,12 @@ enum SavingsAccrual {
         var remainingPot = max(0, pot)
         var allocation: [UUID: Double] = [:]
 
-        for goal in goals.sorted(by: { $0.deadline < $1.deadline }) {
+        for goal in goals.sorted(by: {
+            if $0.protectionScore != $1.protectionScore {
+                return $0.protectionScore > $1.protectionScore
+            }
+            return $0.deadline < $1.deadline
+        }) {
             guard remainingPot > 0 else { break }
             let share = min(remainingPot, max(0, goal.remaining))
             allocation[goal.id] = share

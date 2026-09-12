@@ -25,7 +25,8 @@ timeline, goal health, purchase what-ifs. Deterministic, no networking, no parsi
 of raw bank data.
 
 Takes `FinancialProfile`. Hands out `FinancialDashboardSnapshot`, `CashFlowPoint`,
-`GoalPlanAssessment`, `PurchaseWhatIfAnalysis`, `FinancialHealthStatus`.
+`GoalPlanAssessment`, `GoalHealth`, `GoalPortfolioHealth`, `PurchaseWhatIfAnalysis`,
+`FinancialHealthStatus`.
 
 ### `Finanzas2026/Finanzas2026/ContentView.swift` — the design. Owner: Marc
 
@@ -84,5 +85,6 @@ before restructuring it.
 | Future days, projected cash, weather | `FinancialCore.cashFlowTimeline` |
 | Safe-to-spend | `FinancialInsights.dashboard` |
 | Goal progress | User's target + savings accrued from underspending |
+| Goal health, required saving, projected date, conflicts | `SmartGoalEngine` over the shared forecast |
 | What-If verdict | `FinancialInsights.analyzePurchaseWhatIf` |
 | What-If wording | Gemini, from that verdict |

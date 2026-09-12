@@ -6,9 +6,44 @@ public enum IncomeType: String, Codable, Sendable {
     case oneTime
 }
 
-public enum GoalPriority: String, Codable, Sendable {
+public enum GoalPriority: String, Codable, CaseIterable, Hashable, Sendable {
     case mandatory
+    case high
+    case medium
+    case low
     case flexible
+
+    public var weight: Double {
+        switch self {
+        case .mandatory: 4
+        case .high: 3
+        case .medium: 2
+        case .low: 1
+        case .flexible: 0.75
+        }
+    }
+
+    public var isProtected: Bool { self == .mandatory }
+}
+
+public enum GoalFlexibility: String, Codable, CaseIterable, Hashable, Sendable {
+    case low
+    case medium
+    case high
+
+    public var protectionWeight: Double {
+        switch self {
+        case .low: 1.5
+        case .medium: 1
+        case .high: 0.6
+        }
+    }
+}
+
+public enum GoalLifecycleState: String, Codable, Hashable, Sendable {
+    case active
+    case paused
+    case completed
 }
 
 public enum PurchaseStatus: String, Codable, Sendable {
@@ -95,6 +130,8 @@ public struct Goal: Codable, Identifiable, Sendable {
     public let amountAlreadyPaid: Double
     public let deadline: Date
     public let priority: GoalPriority
+    public let flexibility: GoalFlexibility
+    public let lifecycleState: GoalLifecycleState
 
     public init(
         id: UUID = UUID(),
@@ -102,7 +139,9 @@ public struct Goal: Codable, Identifiable, Sendable {
         targetAmount: Double,
         amountAlreadyPaid: Double = 0,
         deadline: Date,
-        priority: GoalPriority
+        priority: GoalPriority,
+        flexibility: GoalFlexibility = .medium,
+        lifecycleState: GoalLifecycleState = .active
     ) {
         self.id = id
         self.name = name
@@ -110,10 +149,54 @@ public struct Goal: Codable, Identifiable, Sendable {
         self.amountAlreadyPaid = amountAlreadyPaid
         self.deadline = deadline
         self.priority = priority
+        self.flexibility = flexibility
+        self.lifecycleState = lifecycleState
     }
 
     public var remainingAmount: Double {
         max(0, targetAmount - amountAlreadyPaid)
+    }
+
+    public var currentAmount: Double { amountAlreadyPaid }
+    public var targetDate: Date { deadline }
+
+    public var isCompleted: Bool {
+        lifecycleState == .completed || remainingAmount == 0
+    }
+
+    public init(
+        id: UUID = UUID(),
+        name: String,
+        targetAmount: Double,
+        currentAmount: Double,
+        targetDate: Date,
+        priority: GoalPriority,
+        flexibility: GoalFlexibility,
+        lifecycleState: GoalLifecycleState = .active
+    ) {
+        self.init(
+            id: id,
+            name: name,
+            targetAmount: targetAmount,
+            amountAlreadyPaid: currentAmount,
+            deadline: targetDate,
+            priority: priority,
+            flexibility: flexibility,
+            lifecycleState: lifecycleState
+        )
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        targetAmount = try container.decode(Double.self, forKey: .targetAmount)
+        amountAlreadyPaid = try container.decodeIfPresent(Double.self, forKey: .amountAlreadyPaid) ?? 0
+        deadline = try container.decode(Date.self, forKey: .deadline)
+        priority = try container.decodeIfPresent(GoalPriority.self, forKey: .priority) ?? .medium
+        flexibility = try container.decodeIfPresent(GoalFlexibility.self, forKey: .flexibility) ??
+            (priority == .flexible ? .high : priority == .mandatory ? .low : .medium)
+        lifecycleState = try container.decodeIfPresent(GoalLifecycleState.self, forKey: .lifecycleState) ?? .active
     }
 }
 

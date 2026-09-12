@@ -56,6 +56,11 @@ let diagnostics = FinancialProfileDiagnostics.report(
     profile: profile,
     planningHorizon: horizon
 )
+
+let goalPortfolio = try SmartGoalEngine.evaluate(
+    profile: profile,
+    planningHorizon: horizon
+)
 ```
 
 ## Core outputs
@@ -75,6 +80,20 @@ let diagnostics = FinancialProfileDiagnostics.report(
 - recommended weekly spending limit
 - deterministic purchase reason codes for UI explanations
 - profile diagnostics for malformed or weak upstream data
+- dynamic Goal health, projected completion, required savings, portfolio conflicts,
+  priority/flexibility allocation, and goal-aware Safe-to-Spend
+
+## Smart Goals
+
+`SmartGoalEngine` consumes the same normalized `FinancialProfile` and forecast as
+the rest of the package. It does not import Nessie or SwiftUI and does not persist
+derived values. `GoalHealth` is recalculated from cash, dated income and expenses,
+historical variable spending, reserves, deadlines, priority and flexibility.
+
+Use `SmartGoalEngine.impact(of:on:)` for a normalized transaction or an aggregate
+day. Positive movements model unexpected income and negative movements model
+unexpected spending. The numeric impact contract is intentionally separate from
+user-facing copy.
 
 ## Core inputs
 

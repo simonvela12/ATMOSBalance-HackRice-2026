@@ -48,7 +48,7 @@ public extension FinancialInsights {
                 recommendedDate: nil
             )
 
-        case .flexible:
+        case .high, .medium, .low, .flexible:
             let assessment = try FinancialEngine.assessFlexibleGoal(
                 profile: profile,
                 goal: goal,

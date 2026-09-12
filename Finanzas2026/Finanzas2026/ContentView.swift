@@ -39,6 +39,8 @@ struct ContentView: View {
         )
     }
 
+    private var goalPortfolio: GoalPortfolioHealth? { liveContext.goalPortfolio }
+
     private func restorePlan() {
         let plan = PlanPersistence.load()
         goals = plan.goals
@@ -69,7 +71,9 @@ struct ContentView: View {
                 targetAmount: Double(goal.targetAmount),
                 amountAlreadyPaid: min(Double(goal.targetAmount), Double(goal.saved) + accrued),
                 deadline: goal.targetDate,
-                priority: goal.mustHappen ? .mandatory : .flexible
+                priority: goal.mustHappen ? .mandatory : goal.priority,
+                flexibility: goal.flexibility,
+                lifecycleState: goal.lifecycleState
             )
         }
     }
@@ -125,7 +129,9 @@ struct ContentView: View {
                 SavingsAccrual.GoalNeed(
                     id: $0.id,
                     remaining: Double(max(0, $0.targetAmount - $0.saved)),
-                    deadline: $0.targetDate
+                    deadline: $0.targetDate,
+                    priority: $0.mustHappen ? .mandatory : $0.priority,
+                    flexibility: $0.flexibility
                 )
             }
         )
@@ -149,7 +155,12 @@ struct ContentView: View {
         liveContext = LiveFinancialContext(
             profile: profile,
             transactions: bankStore.transactions,
-            timeline: timeline
+            timeline: timeline,
+            goalPortfolio: try? SmartGoalEngine.evaluate(
+                profile: profile,
+                planningHorizon: horizon,
+                calendar: AppFinancialData.calendar
+            )
         )
     }
 
@@ -479,6 +490,7 @@ struct ContentView: View {
         GoalsCard(
             goals: displayGoals,
             accrued: savingsAllocation.mapValues { Int($0.rounded()) },
+            portfolio: goalPortfolio,
             onAdd: {
                 goalBeingEdited = nil
                 showingAddGoal = true
@@ -492,6 +504,15 @@ struct ContentView: View {
             },
             onDelete: { goal in
                 goalPendingDeletion = goals.first { $0.id == goal.id } ?? goal
+            },
+            onTogglePause: { goal in
+                guard let index = goals.firstIndex(where: { $0.id == goal.id }) else { return }
+                goals[index].lifecycleState = goal.lifecycleState == .paused ? .active : .paused
+            },
+            onComplete: { goal in
+                guard let index = goals.firstIndex(where: { $0.id == goal.id }) else { return }
+                goals[index].saved = goals[index].targetAmount
+                goals[index].lifecycleState = .completed
             }
         )
         .padding(.horizontal, 20)
@@ -1097,9 +1118,12 @@ private struct MiniMetric: View {
 private struct GoalsCard: View {
     let goals: [FinancialGoal]
     let accrued: [UUID: Int]
+    let portfolio: GoalPortfolioHealth?
     let onAdd: () -> Void
     let onEdit: (FinancialGoal) -> Void
     let onDelete: (FinancialGoal) -> Void
+    let onTogglePause: (FinancialGoal) -> Void
+    let onComplete: (FinancialGoal) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -1123,6 +1147,26 @@ private struct GoalsCard: View {
                         .background(.white.opacity(0.11), in: Capsule())
                 }
                 .buttonStyle(.plain)
+            }
+
+            if let portfolio, !goals.isEmpty {
+                HStack(spacing: 10) {
+                    GoalPortfolioMetric(
+                        title: "SAFE TO SPEND",
+                        value: portfolio.safeToSpendToday.formatted(.currency(code: "USD").precision(.fractionLength(0)))
+                    )
+                    GoalPortfolioMetric(
+                        title: "SAVE EACH WEEK",
+                        value: portfolio.requiredToSaveWeekly.formatted(.currency(code: "USD").precision(.fractionLength(0)))
+                    )
+                }
+                if let delayedID = portfolio.recommendedGoalToDelayID,
+                   let delayed = goals.first(where: { $0.id == delayedID }) {
+                    Label("Protect higher-priority goals; consider moving \(delayed.name).",
+                          systemImage: "arrow.triangle.branch")
+                        .font(.helvetica(.caption, weight: .semibold))
+                        .foregroundStyle(Color.sunGold)
+                }
             }
 
             if goals.isEmpty {
@@ -1153,8 +1197,11 @@ private struct GoalsCard: View {
                             GoalProgressTile(
                                 goal: goal,
                                 accrued: accrued[goal.id] ?? 0,
+                                health: portfolio?.goals.first(where: { $0.goal.id == goal.id }),
                                 onEdit: { onEdit(goal) },
-                                onDelete: { onDelete(goal) }
+                                onDelete: { onDelete(goal) },
+                                onTogglePause: { onTogglePause(goal) },
+                                onComplete: { onComplete(goal) }
                             )
                         }
                     }
@@ -1171,11 +1218,33 @@ private struct GoalsCard: View {
     }
 }
 
+private struct GoalPortfolioMetric: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.helvetica(.caption2, weight: .bold))
+                .foregroundStyle(.white.opacity(0.48))
+            Text(value)
+                .font(.helvetica(.headline, weight: .bold))
+                .monospacedDigit()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(11)
+        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 11))
+    }
+}
+
 private struct GoalProgressTile: View {
     let goal: FinancialGoal
     let accrued: Int
+    let health: GoalHealth?
     let onEdit: () -> Void
     let onDelete: () -> Void
+    let onTogglePause: () -> Void
+    let onComplete: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1187,6 +1256,15 @@ private struct GoalProgressTile: View {
                     Button(action: onEdit) {
                         Label("Edit goal", systemImage: "pencil")
                     }
+                    if goal.lifecycleState != .completed {
+                        Button(action: onTogglePause) {
+                            Label(goal.lifecycleState == .paused ? "Resume goal" : "Pause goal",
+                                  systemImage: goal.lifecycleState == .paused ? "play.fill" : "pause.fill")
+                        }
+                        Button(action: onComplete) {
+                            Label("Mark complete", systemImage: "checkmark.circle")
+                        }
+                    }
                     Button(role: .destructive, action: onDelete) {
                         Label("Delete goal", systemImage: "trash")
                     }
@@ -1197,6 +1275,18 @@ private struct GoalProgressTile: View {
                         .background(.white.opacity(0.08), in: Circle())
                 }
                 .accessibilityLabel("Goal options")
+            }
+
+            if let health {
+                HStack {
+                    Text(goalStatusTitle(health.status))
+                        .font(.helvetica(.caption2, weight: .bold))
+                        .foregroundStyle(goalStatusColor(health.status))
+                    Spacer()
+                    Text("\(goal.priority.title) · \(goal.flexibility.title) flex")
+                        .font(.helvetica(.caption2, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.45))
+                }
             }
 
             Text(goal.name)
@@ -1239,6 +1329,21 @@ private struct GoalProgressTile: View {
                 .font(.helvetica(.caption2))
                 .foregroundStyle(.white.opacity(0.45))
                 .fixedSize(horizontal: false, vertical: true)
+
+            if let health, health.status != .completed, health.status != .paused {
+                Text("Save \(health.requiredWeeklySavings.formatted(.currency(code: "USD").precision(.fractionLength(0))))/week")
+                    .font(.helvetica(.caption2, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.62))
+                if let date = health.recommendedTargetDate {
+                    Text("More realistic: \(date.formatted(.dateTime.month(.abbreviated).day().year()))")
+                        .font(.helvetica(.caption2))
+                        .foregroundStyle(Color.sunGold)
+                } else if let date = health.projectedCompletionDate {
+                    Text("Projected: \(date.formatted(.dateTime.month(.abbreviated).day().year()))")
+                        .font(.helvetica(.caption2))
+                        .foregroundStyle(.white.opacity(0.48))
+                }
+            }
         }
         .padding(14)
         .frame(width: 230, alignment: .leading)
@@ -1257,6 +1362,8 @@ private struct AddGoalSheet: View {
     @State private var targetDate = Calendar.current.date(byAdding: .month, value: 4, to: MockForecast.todayDate) ?? MockForecast.todayDate
     @State private var symbol = "airplane"
     @State private var mustHappen = true
+    @State private var priority = GoalPriority.medium
+    @State private var flexibility = GoalFlexibility.medium
 
     init(existingGoal: FinancialGoal? = nil, onSave: @escaping (FinancialGoal) -> Void) {
         self.existingGoal = existingGoal
@@ -1267,6 +1374,8 @@ private struct AddGoalSheet: View {
         _targetDate = State(initialValue: existingGoal?.targetDate ?? Calendar.current.date(byAdding: .month, value: 4, to: MockForecast.todayDate) ?? MockForecast.todayDate)
         _symbol = State(initialValue: existingGoal?.symbol ?? "airplane")
         _mustHappen = State(initialValue: existingGoal?.mustHappen ?? true)
+        _priority = State(initialValue: existingGoal?.priority ?? .medium)
+        _flexibility = State(initialValue: existingGoal?.flexibility ?? .medium)
     }
 
     private var targetAmount: Int { Int(amountText.filter(\.isNumber)) ?? 0 }
@@ -1318,6 +1427,28 @@ private struct AddGoalSheet: View {
                             .padding(.top, 6)
                     }
 
+                    EntryCard(title: "RELATIVE PRIORITY") {
+                        Picker("Relative priority", selection: $priority) {
+                            Text("High").tag(GoalPriority.high)
+                            Text("Medium").tag(GoalPriority.medium)
+                            Text("Low").tag(GoalPriority.low)
+                        }
+                        .pickerStyle(.segmented)
+                    }
+
+                    EntryCard(title: "FLEXIBILITY") {
+                        Picker("Flexibility", selection: $flexibility) {
+                            Text("Low").tag(GoalFlexibility.low)
+                            Text("Medium").tag(GoalFlexibility.medium)
+                            Text("High").tag(GoalFlexibility.high)
+                        }
+                        .pickerStyle(.segmented)
+                        Text("Less flexible goals receive stronger protection when goals compete.")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.55))
+                            .padding(.top, 6)
+                    }
+
                     EntryCard(title: "ICON") {
                         Picker("Goal icon", selection: $symbol) {
                             Label("Travel", systemImage: "airplane").tag("airplane")
@@ -1337,7 +1468,10 @@ private struct AddGoalSheet: View {
                             saved: min(saved, targetAmount),
                             targetDate: targetDate,
                             symbol: symbol,
-                            isMandatory: mustHappen
+                            isMandatory: mustHappen,
+                            priority: priority,
+                            flexibility: flexibility,
+                            lifecycleState: existingGoal?.lifecycleState ?? .active
                         ))
                         dismiss()
                     }
@@ -1388,6 +1522,20 @@ private struct WhatIfSheet: View {
             profile: profile,
             amount: Double(assessedAmount),
             purchaseDate: profile.asOfDate,
+            planningHorizon: AppFinancialData.horizon(from: profile.asOfDate),
+            calendar: AppFinancialData.calendar
+        )
+    }
+
+    private var smartGoalImpact: GoalTransactionImpact? {
+        guard let profile, assessedAmount > 0 else { return nil }
+        return try? SmartGoalEngine.impact(
+            of: GoalCashMovement(
+                amount: -Double(assessedAmount),
+                date: profile.asOfDate,
+                label: schedule == .recurring ? "What-if recurring spending" : "What-if purchase"
+            ),
+            on: profile,
             planningHorizon: AppFinancialData.horizon(from: profile.asOfDate),
             calendar: AppFinancialData.calendar
         )
@@ -1525,11 +1673,13 @@ private struct WhatIfSheet: View {
 
                                 ForEach(goals) { goal in
                                     let impact = analysis.goalImpacts.first { $0.goal.id == goal.id }
+                                    let smartImpact = smartGoalImpact?.goalImpacts.first { $0.goal.id == goal.id }
                                     WhatIfGoalRow(
                                         goal: goal,
                                         beforeStatus: impact?.before.status,
                                         afterStatus: impact?.after.status,
-                                        worsened: impact?.worsened ?? false
+                                        worsened: impact?.worsened ?? false,
+                                        smartImpact: smartImpact
                                     )
                                 }
                             }
@@ -1899,6 +2049,7 @@ private struct WhatIfGoalRow: View {
     let beforeStatus: FinancialHealthStatus?
     let afterStatus: FinancialHealthStatus?
     let worsened: Bool
+    let smartImpact: GoalMovementImpact?
 
     private func label(_ status: FinancialHealthStatus) -> String {
         switch status {
@@ -1909,6 +2060,18 @@ private struct WhatIfGoalRow: View {
     }
 
     private var detail: String {
+        if let impact = smartImpact {
+            if let days = impact.projectedCompletionDateChangeInDays, days != 0 {
+                return days > 0 ? "Projected completion moves about \(days) days later"
+                    : "Projected completion improves by about \(abs(days)) days"
+            }
+            if impact.shortfallChange > 0.005 {
+                return "Adds \(impact.shortfallChange.formatted(.currency(code: "USD").precision(.fractionLength(0)))) to the shortfall"
+            }
+            if impact.statusBefore != impact.statusAfter {
+                return "Moves from \(goalStatusTitle(impact.statusBefore)) to \(goalStatusTitle(impact.statusAfter))"
+            }
+        }
         guard let afterStatus else { return "Not affected by this purchase" }
         guard worsened, let beforeStatus else {
             return "Stays " + label(afterStatus)
@@ -1928,10 +2091,15 @@ private struct WhatIfGoalRow: View {
                     .foregroundStyle(.white.opacity(0.54))
             }
             Spacer()
-            Image(systemName: worsened ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+            Image(systemName: isWorse ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                 .font(.helvetica(.caption, weight: .bold))
-                .foregroundStyle(worsened ? Color.sunGold : .white.opacity(0.4))
+                .foregroundStyle(isWorse ? Color.sunGold : .white.opacity(0.4))
         }
+    }
+
+    private var isWorse: Bool {
+        worsened || (smartImpact?.shortfallChange ?? 0) > 0.005
+            || (smartImpact?.projectedCompletionDateChangeInDays ?? 0) > 0
     }
 }
 
@@ -2635,11 +2803,14 @@ private struct FinancialGoal: Identifiable, Codable, Equatable {
     let id: UUID
     var name: String
     let targetAmount: Int
-    let saved: Int
+    var saved: Int
     let targetDate: Date
     let symbol: String
     /// Optional so plans saved before this field existed still decode.
     let isMandatory: Bool?
+    let priority: GoalPriority
+    let flexibility: GoalFlexibility
+    var lifecycleState: GoalLifecycleState
 
     /// Must-happen goals are subtracted from the projected cash path, so they
     /// reduce safe-to-spend straight away. Nice-to-have goals stay out of the
@@ -2656,7 +2827,10 @@ private struct FinancialGoal: Identifiable, Codable, Equatable {
             saved: newSaved,
             targetDate: targetDate,
             symbol: symbol,
-            isMandatory: isMandatory
+            isMandatory: isMandatory,
+            priority: priority,
+            flexibility: flexibility,
+            lifecycleState: lifecycleState
         )
     }
 
@@ -2667,6 +2841,85 @@ private struct FinancialGoal: Identifiable, Codable, Equatable {
 
     var remaining: Int { max(0, targetAmount - saved) }
 
+    init(
+        id: UUID,
+        name: String,
+        targetAmount: Int,
+        saved: Int,
+        targetDate: Date,
+        symbol: String,
+        isMandatory: Bool? = nil,
+        priority: GoalPriority = .medium,
+        flexibility: GoalFlexibility = .medium,
+        lifecycleState: GoalLifecycleState = .active
+    ) {
+        self.id = id
+        self.name = name
+        self.targetAmount = targetAmount
+        self.saved = saved
+        self.targetDate = targetDate
+        self.symbol = symbol
+        self.isMandatory = isMandatory
+        self.priority = priority
+        self.flexibility = flexibility
+        self.lifecycleState = lifecycleState
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, targetAmount, saved, targetDate, symbol, isMandatory
+        case priority, flexibility, lifecycleState
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        targetAmount = try container.decode(Int.self, forKey: .targetAmount)
+        saved = try container.decode(Int.self, forKey: .saved)
+        targetDate = try container.decode(Date.self, forKey: .targetDate)
+        symbol = try container.decode(String.self, forKey: .symbol)
+        isMandatory = try container.decodeIfPresent(Bool.self, forKey: .isMandatory)
+        priority = try container.decodeIfPresent(GoalPriority.self, forKey: .priority) ??
+            (isMandatory == true ? .high : .medium)
+        flexibility = try container.decodeIfPresent(GoalFlexibility.self, forKey: .flexibility) ??
+            (isMandatory == true ? .low : .medium)
+        lifecycleState = try container.decodeIfPresent(GoalLifecycleState.self, forKey: .lifecycleState) ?? .active
+    }
+
+}
+
+private extension GoalPriority {
+    var title: String {
+        switch self {
+        case .mandatory, .high: "High"
+        case .medium: "Medium"
+        case .low, .flexible: "Low"
+        }
+    }
+}
+
+private extension GoalFlexibility {
+    var title: String { rawValue.capitalized }
+}
+
+private func goalStatusTitle(_ status: GoalStatus) -> String {
+    switch status {
+    case .ahead: "Ahead"
+    case .onTrack: "On track"
+    case .behind: "Behind"
+    case .atRisk: "At risk"
+    case .unrealistic: "Needs a change"
+    case .completed: "Completed"
+    case .paused: "Paused"
+    }
+}
+
+private func goalStatusColor(_ status: GoalStatus) -> Color {
+    switch status {
+    case .ahead, .onTrack, .completed: .green
+    case .behind, .paused: .orange
+    case .atRisk, .unrealistic: .red
+    }
 }
 
 private struct FinancialEntry: Identifiable, Codable, Equatable {

@@ -113,7 +113,9 @@ public enum QualitativeProfileUpdater {
                         targetAmount: goal.targetAmount,
                         amountAlreadyPaid: goal.amountAlreadyPaid,
                         deadline: goal.deadline,
-                        priority: priority
+                        priority: priority,
+                        flexibility: goal.flexibility,
+                        lifecycleState: goal.lifecycleState
                     )
                 }
 

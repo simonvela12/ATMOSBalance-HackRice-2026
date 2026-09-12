@@ -12,6 +12,7 @@ struct LiveFinancialContext {
     let profile: FinancialProfile?
     let transactions: [FinanceCore.FinancialTransaction]
     let timeline: [CashFlowPoint]
+    let goalPortfolio: GoalPortfolioHealth?
 
     /// Grouped once at construction: these lookups run for every rendered day.
     private let transactionsByDay: [Date: [FinanceCore.FinancialTransaction]]
@@ -20,11 +21,13 @@ struct LiveFinancialContext {
     init(
         profile: FinancialProfile?,
         transactions: [FinanceCore.FinancialTransaction],
-        timeline: [CashFlowPoint]
+        timeline: [CashFlowPoint],
+        goalPortfolio: GoalPortfolioHealth? = nil
     ) {
         self.profile = profile
         self.transactions = transactions
         self.timeline = timeline
+        self.goalPortfolio = goalPortfolio
 
         let calendar = AppFinancialData.calendar
         self.transactionsByDay = Dictionary(
