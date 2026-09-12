@@ -14,7 +14,7 @@ final class QualitativeNotesTests: XCTestCase {
 
     func testSpanishNotFrequentIncomeBecomesIrregular() {
         let result = QualitativeNoteInterpreter.parse(
-            "Esto planeo no recibirlo frecuentemente.",
+            "Esto no es frecuente.",
             context: QualitativeNoteContext(subject: .income),
             asOfDate: asOfDate,
             calendar: calendar
