@@ -30,8 +30,10 @@ struct FinanceCoreDemo {
             .appendingPathComponent(".finance-data/finance-store.json")
         let repository = try FileFinancialRepository(fileURL: repositoryURL)
         try await repository.load()
-        let provider = NessieBankingProvider(configuration: configuration)
-        let service = BankSyncService(provider: provider, repository: repository)
+        let diagnostics = BankingDiagnostics.console
+        let provider = NessieBankingProvider(configuration: configuration, diagnostics: diagnostics)
+        let service = BankSyncService(provider: provider, repository: repository,
+                                      diagnostics: diagnostics)
 
         print("Conectando con Capital One — Nessie Sandbox…")
         print("Sincronizando cuentas y transacciones…")

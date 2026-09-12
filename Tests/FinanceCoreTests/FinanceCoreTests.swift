@@ -69,6 +69,30 @@ final class FinanceCoreTests: XCTestCase {
         XCTAssertEqual(stored.count, 2)
     }
 
+    func testSyncDiagnosticsReportPersistenceAndDeduplication() async throws {
+        let collector = DiagnosticCollector()
+        let diagnostics = BankingDiagnostics { event in await collector.append(event) }
+        let transaction = externalTransaction(id: "purchase:one", description: "One", amount: 500)
+        let provider = MockBankingProvider(account: account1, transactions: [transaction])
+        let repository = InMemoryFinancialRepository()
+        let service = BankSyncService(provider: provider, repository: repository,
+                                      diagnostics: diagnostics)
+
+        _ = try await service.syncAll()
+        _ = try await service.syncAll()
+        let events = await collector.events()
+
+        XCTAssertEqual(events.filter { $0.kind == .syncStart }.count, 2)
+        XCTAssertEqual(events.filter { $0.kind == .syncEnd }.count, 2)
+        XCTAssertTrue(events.contains {
+            $0.kind == .newTransactions && $0.details["count"] == "1"
+        })
+        XCTAssertTrue(events.contains {
+            $0.kind == .duplicatesIgnored && $0.details["count"] == "1"
+        })
+        XCTAssertEqual(events.filter { $0.kind == .localStoreUpdated }.count, 2)
+    }
+
     func testChangedProviderDataUpdatesRatherThanDuplicates() async throws {
         let provider = MockBankingProvider(account: account1,
                                            transactions: [externalTransaction(id: "purchase:one", description: "Old", amount: 500)])
@@ -206,6 +230,13 @@ final class FinanceCoreTests: XCTestCase {
                                 description: description, sourceType: .purchase, direction: .outflow,
                                 amountMinorUnits: amount)
     }
+}
+
+private actor DiagnosticCollector {
+    private var recorded: [BankingDiagnosticEvent] = []
+
+    func append(_ event: BankingDiagnosticEvent) { recorded.append(event) }
+    func events() -> [BankingDiagnosticEvent] { recorded }
 }
 
 private actor MultiAccountMockProvider: BankingProvider {

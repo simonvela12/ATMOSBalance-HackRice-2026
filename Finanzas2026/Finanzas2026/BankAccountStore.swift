@@ -21,8 +21,11 @@ final class BankAccountStore: ObservableObject {
     private var syncServices: [String: BankSyncService] = [:]
     private var automaticRefreshTask: Task<Void, Never>?
     private let automaticRefreshInterval: Duration
+    private let diagnostics = BankingDiagnostics.console
 
-    init(automaticRefreshInterval: Duration = .seconds(15 * 60)) {
+    // Fast active-app cadence for the hackathon demo. Use a longer server-friendly
+    // interval before production release.
+    init(automaticRefreshInterval: Duration = .seconds(10)) {
         self.automaticRefreshInterval = automaticRefreshInterval
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let storeURL = support
@@ -58,8 +61,10 @@ final class BankAccountStore: ObservableObject {
                 apiKey: apiKey,
                 customerID: customerID
             )
-            let provider = NessieBankingProvider(configuration: configuration)
-            let service = BankSyncService(provider: provider, repository: repository)
+            let provider = NessieBankingProvider(configuration: configuration,
+                                                 diagnostics: diagnostics)
+            let service = BankSyncService(provider: provider, repository: repository,
+                                          diagnostics: diagnostics)
             syncServices["nessie|\(customerID)"] = service
             lastSyncResult = try await service.syncAll()
             try await reloadFromRepository()
@@ -105,6 +110,10 @@ final class BankAccountStore: ObservableObject {
     private func reloadFromRepository() async throws {
         accounts = try await repository.accounts()
         transactions = try await repository.transactions(from: nil, to: nil)
+        await diagnostics.record(.financialStateUpdated, details: [
+            "accounts": String(accounts.count),
+            "transactions": String(transactions.count)
+        ])
     }
 
     private func startAutomaticRefreshIfNeeded() {

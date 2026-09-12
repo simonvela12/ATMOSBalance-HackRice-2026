@@ -27,6 +27,26 @@ final class NessieIntegrationTests: XCTestCase {
         XCTAssertEqual(components.queryItems, [URLQueryItem(name: "key", value: "test-key")])
     }
 
+    func testNessieDiagnosticsExposePathAndStatusButNeverAPIKey() async throws {
+        let collector = NessieDiagnosticCollector()
+        let diagnostics = BankingDiagnostics { event in await collector.append(event) }
+        let transport = RoutingNessieTransport(routes: [
+            "/customers/customer-123/accounts": .json("[]")
+        ])
+        let client = NessieAPIClient(configuration: try configuration(), transport: transport,
+                                     diagnostics: diagnostics)
+
+        let _: [NessieAccount] = try await client.accounts()
+        let events = await collector.events()
+        let serializedDetails = events.flatMap(\.details.values).joined(separator: " ")
+
+        XCTAssertEqual(events.map(\.kind), [.nessieRequest, .nessieResponse])
+        XCTAssertEqual(events.first?.details["path"], "/customers/customer-123/accounts")
+        XCTAssertEqual(events.last?.details["status"], "200")
+        XCTAssertFalse(serializedDetails.contains("test-key"))
+        XCTAssertFalse(serializedDetails.contains("?key="))
+    }
+
     func testCompleteNessieSyncMapsEveryEndpointAndCachesMerchant() async throws {
         let transport = RoutingNessieTransport(routes: fullRoutes)
         let configuration = try configuration()
@@ -82,11 +102,34 @@ final class NessieIntegrationTests: XCTestCase {
                                           accountType: .checking, balanceMinorUnits: 0)
 
         let transactions = try await provider.fetchTransactions(for: account)
+        _ = try await provider.fetchTransactions(for: account)
+        let requests = await transport.recordedRequests()
 
         XCTAssertEqual(transactions.count, 1)
         XCTAssertEqual(transactions.first?.description, "Purchase without enrichment")
         XCTAssertNil(transactions.first?.merchantName)
         XCTAssertEqual(transactions.first?.amountMinorUnits, 1_234)
+        XCTAssertEqual(requests.filter { URL(string: $0.url)?.path == "/merchants/merchant-down" }.count, 1)
+    }
+
+    func testMerchantAcceptsNessieSingleStringCategory() async throws {
+        var routes = emptyTransactionRoutes
+        routes["/accounts/account-1/purchases"] = .json("""
+            [{"_id":"purchase-1","merchant_id":"merchant-1","payer_id":"account-1",
+              "purchase_date":"2026-09-01","amount":12.34,"status":"completed"}]
+            """)
+        routes["/merchants/merchant-1"] = .json("""
+            {"_id":"merchant-1","name":"Campus Market","category":"Groceries"}
+            """)
+        let provider = NessieBankingProvider(
+            configuration: try configuration(),
+            transport: RoutingNessieTransport(routes: routes)
+        )
+
+        let transactions = try await provider.fetchTransactions(for: testAccount())
+
+        XCTAssertEqual(transactions.first?.merchantName, "Campus Market")
+        XCTAssertEqual(transactions.first?.category, "Groceries")
     }
 
     func testNessieStatusAndDecodingFailuresBecomeTypedErrors() async throws {
@@ -275,6 +318,13 @@ final class NessieIntegrationTests: XCTestCase {
             """)
         return routes
     }
+}
+
+private actor NessieDiagnosticCollector {
+    private var recorded: [BankingDiagnosticEvent] = []
+
+    func append(_ event: BankingDiagnosticEvent) { recorded.append(event) }
+    func events() -> [BankingDiagnosticEvent] { recorded }
 }
 
 private struct StubResponse: Sendable {

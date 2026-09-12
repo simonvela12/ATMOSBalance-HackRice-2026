@@ -28,10 +28,14 @@ public struct SyncResult: Equatable, Sendable {
 public actor BankSyncService {
     private let provider: any BankingProvider
     private let repository: any FinancialDataRepository
+    private let diagnostics: BankingDiagnostics
     private var isSyncing = false
 
-    public init(provider: any BankingProvider, repository: any FinancialDataRepository) {
-        self.provider = provider; self.repository = repository
+    public init(provider: any BankingProvider, repository: any FinancialDataRepository,
+                diagnostics: BankingDiagnostics = .disabled) {
+        self.provider = provider
+        self.repository = repository
+        self.diagnostics = diagnostics
     }
 
     public func syncAll() async throws -> SyncResult {
@@ -39,22 +43,51 @@ public actor BankSyncService {
         isSyncing = true
         defer { isSyncing = false }
         let startedAt = Date()
-        var connection = try await provider.connect()
-        let externalAccounts = try await provider.fetchAccounts()
-        let normalizedAccounts = externalAccounts.map { BankingDomainMapper.account($0, syncedAt: startedAt) }
-        let transactionSync = await fetchTransactions(for: externalAccounts, syncedAt: startedAt)
-        let finishedAt = Date()
-        connection.status = .connected; connection.lastSyncedAt = finishedAt
-        let counts = try await repository.persist(connection: connection, accounts: normalizedAccounts,
-                                                  transactions: transactionSync.transactions)
-        return SyncResult(accountsFetched: externalAccounts.count,
-                          accountsInserted: counts.accountsInserted, accountsUpdated: counts.accountsUpdated,
-                          transactionsFetched: transactionSync.transactions.count,
-                          transactionsInserted: counts.transactionsInserted,
-                          transactionsUpdated: counts.transactionsUpdated,
-                          duplicatesIgnored: counts.duplicatesIgnored,
-                          accountFailures: transactionSync.failures,
-                          startedAt: startedAt, finishedAt: finishedAt)
+        await diagnostics.record(.syncStart)
+        do {
+            var connection = try await provider.connect()
+            let externalAccounts = try await provider.fetchAccounts()
+            let normalizedAccounts = externalAccounts.map { BankingDomainMapper.account($0, syncedAt: startedAt) }
+            let transactionSync = await fetchTransactions(for: externalAccounts, syncedAt: startedAt)
+            await diagnostics.record(.transactionsReceived, details: [
+                "accounts": String(externalAccounts.count),
+                "count": String(transactionSync.transactions.count),
+                "failedAccounts": String(transactionSync.failures.count)
+            ])
+            let finishedAt = Date()
+            connection.status = .connected; connection.lastSyncedAt = finishedAt
+            let counts = try await repository.persist(connection: connection, accounts: normalizedAccounts,
+                                                      transactions: transactionSync.transactions)
+            await diagnostics.record(.newTransactions,
+                                     details: ["count": String(counts.transactionsInserted)])
+            await diagnostics.record(.duplicatesIgnored,
+                                     details: ["count": String(counts.duplicatesIgnored)])
+            await diagnostics.record(.localStoreUpdated, details: [
+                "accountsInserted": String(counts.accountsInserted),
+                "accountsUpdated": String(counts.accountsUpdated),
+                "transactionsInserted": String(counts.transactionsInserted),
+                "transactionsUpdated": String(counts.transactionsUpdated)
+            ])
+            await diagnostics.record(.syncEnd, details: [
+                "durationMs": String(Int(finishedAt.timeIntervalSince(startedAt) * 1_000)),
+                "result": transactionSync.failures.isEmpty ? "success" : "partial"
+            ])
+            return SyncResult(accountsFetched: externalAccounts.count,
+                              accountsInserted: counts.accountsInserted, accountsUpdated: counts.accountsUpdated,
+                              transactionsFetched: transactionSync.transactions.count,
+                              transactionsInserted: counts.transactionsInserted,
+                              transactionsUpdated: counts.transactionsUpdated,
+                              duplicatesIgnored: counts.duplicatesIgnored,
+                              accountFailures: transactionSync.failures,
+                              startedAt: startedAt, finishedAt: finishedAt)
+        } catch {
+            let finishedAt = Date()
+            await diagnostics.record(.syncEnd, details: [
+                "durationMs": String(Int(finishedAt.timeIntervalSince(startedAt) * 1_000)),
+                "result": "failure", "errorType": String(describing: type(of: error))
+            ])
+            throw error
+        }
     }
 
     private func fetchTransactions(

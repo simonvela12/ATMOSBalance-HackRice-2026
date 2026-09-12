@@ -5,10 +5,13 @@ public struct NessieBankingProvider: BankingProvider, Sendable {
     private let client: NessieAPIClient
     private let merchantCache: MerchantCache
 
-    public init(configuration: NessieConfiguration, transport: any NessieTransport = URLSessionNessieTransport()) {
+    public init(configuration: NessieConfiguration,
+                transport: any NessieTransport = URLSessionNessieTransport(),
+                diagnostics: BankingDiagnostics = .disabled) {
         self.configuration = configuration
-        self.client = NessieAPIClient(configuration: configuration, transport: transport)
-        self.merchantCache = MerchantCache()
+        self.client = NessieAPIClient(configuration: configuration, transport: transport,
+                                      diagnostics: diagnostics)
+        self.merchantCache = MerchantCache(diagnostics: diagnostics)
     }
 
     public func connect() async throws -> BankConnection {

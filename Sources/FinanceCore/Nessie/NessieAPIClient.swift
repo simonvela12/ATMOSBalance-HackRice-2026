@@ -24,10 +24,14 @@ public actor URLSessionNessieTransport: NessieTransport {
 public struct NessieAPIClient: Sendable {
     private let configuration: NessieConfiguration
     private let transport: any NessieTransport
+    private let diagnostics: BankingDiagnostics
 
-    public init(configuration: NessieConfiguration, transport: any NessieTransport = URLSessionNessieTransport()) {
+    public init(configuration: NessieConfiguration,
+                transport: any NessieTransport = URLSessionNessieTransport(),
+                diagnostics: BankingDiagnostics = .disabled) {
         self.configuration = configuration
         self.transport = transport
+        self.diagnostics = diagnostics
     }
 
     func accounts() async throws -> [NessieAccount] {
@@ -81,11 +85,18 @@ public struct NessieAPIClient: Sendable {
         request.timeoutInterval = configuration.requestTimeout
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
+        // Never log the absolute URL: it contains the API key query parameter.
+        await diagnostics.record(.nessieRequest, details: ["method": "GET", "path": url.path])
+
         let data: Data
         let response: HTTPURLResponse
         do { (data, response) = try await transport.data(for: request) }
         catch let error as BankingError { throw error }
         catch { throw BankingError.networkError(error.localizedDescription) }
+
+        await diagnostics.record(.nessieResponse, details: [
+            "bytes": String(data.count), "path": url.path, "status": String(response.statusCode)
+        ])
 
         switch response.statusCode {
         case 200..<300: break

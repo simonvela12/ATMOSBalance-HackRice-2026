@@ -77,4 +77,17 @@ struct NessieMerchant: Decodable, Sendable {
     let category: [String]?
 
     enum CodingKeys: String, CodingKey { case id = "_id", name, category }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+        if let categories = try? container.decodeIfPresent([String].self, forKey: .category) {
+            category = categories
+        } else if let singleCategory = try container.decodeIfPresent(String.self, forKey: .category) {
+            category = [singleCategory]
+        } else {
+            category = nil
+        }
+    }
 }
