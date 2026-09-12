@@ -126,10 +126,6 @@ public struct RecurrenceRule: Codable, Equatable, Sendable {
         self.isPaused = isPaused
     }
 
-    public init(cadence: RecurrenceCadence, firstOccurrence: Date, endDate: Date? = nil, isPaused: Bool = false) {
-        self.init(cadence: PlanningRecurrenceCadence(cadence), firstOccurrence: firstOccurrence, endDate: endDate, isPaused: isPaused)
-    }
-
     public func occurrenceDates(through horizon: Date, calendar: Calendar = .current) -> [Date] {
         guard !isPaused, horizon >= firstOccurrence else { return [] }
         var dates: [Date] = []
