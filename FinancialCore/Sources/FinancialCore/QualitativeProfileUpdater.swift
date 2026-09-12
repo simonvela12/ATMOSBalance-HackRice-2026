@@ -114,9 +114,9 @@ public enum QualitativeProfileUpdater {
             }
         }
 
-        // Expense-specific context may annotate linked financial data, but it must not create
+        // Transaction-specific context may annotate linked financial data, but it must not create
         // future cash from a transaction the profile never contained. This protects the engine
-        // from stale UI/demo context manufacturing reimbursements or recurring expenses.
+        // from stale UI/demo context manufacturing reimbursements or recurring income/expenses.
         let hasSelectedExpense = updated.expenseEvents.contains {
             matchesSelectedExpense($0, context: context)
         }
@@ -137,7 +137,11 @@ public enum QualitativeProfileUpdater {
             }
         }
 
+        let hasSelectedIncome = updated.incomeEvents.contains {
+            matchesSelectedIncome($0, context: context)
+        }
         if context.subject == .income,
+           hasSelectedIncome,
            let recurring = try? QualitativeDirectiveMaterializer.recurringIncomeEvents(
                 from: result,
                 context: context,
@@ -239,6 +243,22 @@ public enum QualitativeProfileUpdater {
             reimbursable: event.reimbursable,
             extraordinary: event.extraordinary
         )
+    }
+
+    private static func matchesSelectedIncome(
+        _ event: IncomeEvent,
+        context: QualitativeNoteContext
+    ) -> Bool {
+        guard let label = context.label, event.source == label else { return false }
+
+        if let referenceDate = context.referenceDate, event.date != referenceDate {
+            return false
+        }
+        if let referenceAmount = context.referenceAmount,
+           abs(event.amount - referenceAmount) > 0.000_001 {
+            return false
+        }
+        return true
     }
 
     /// Direct expense directives describe the selected transaction, not every transaction that
