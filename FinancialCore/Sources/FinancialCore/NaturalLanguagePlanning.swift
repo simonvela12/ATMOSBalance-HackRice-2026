@@ -109,7 +109,7 @@ public enum NaturalLanguagePlanningInterpreter {
         let reimbursementPhrases = ["pay me back", "paid back", "reimburse", "refund", "me deben", "me devuelve", "me devuelven", "reembolso", "devolver"]
         if reimbursementPhrases.contains(where: text.contains) { return .income }
 
-        let incomePhrases = ["will receive", "will get", "get paid", "getting paid", "income", "deposit", "family sends", "family will send", "me van a mandar", "me va a mandar", "me mandan", "me pagan", "voy a cobrar", "cobro", "ingreso", "recibo", "recibire", "transferencia de mi familia"]
+        let incomePhrases = ["will receive", "will get", "get paid", "getting paid", "income", "deposit", "family sends", "family will send", "me van a mandar", "me va a mandar", "me mandan", "me van a pagar", "me va a pagar", "me pagan", "voy a cobrar", "cobro", "ingreso", "recibo", "recibire", "transferencia de mi familia"]
         if incomePhrases.contains(where: text.contains) { return .income }
 
         let expensePhrases = ["will pay", "have to pay", "need to pay", "bill", "expense", "spend", "buy", "purchase", "tengo que pagar", "voy a pagar", "debo pagar", "gastar", "gasto", "comprar", "compra", "cuesta"]
