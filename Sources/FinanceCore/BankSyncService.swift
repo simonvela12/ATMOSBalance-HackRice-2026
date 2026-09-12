@@ -56,8 +56,16 @@ public actor BankSyncService {
             ])
             let finishedAt = Date()
             connection.status = .connected; connection.lastSyncedAt = finishedAt
-            let counts = try await repository.persist(connection: connection, accounts: normalizedAccounts,
-                                                      transactions: transactionSync.transactions)
+            let failedAccountIDs = Set(transactionSync.failures.map(\.externalAccountID))
+            let authoritativeAccountIDs = Set(
+                externalAccounts.map(\.externalAccountID).filter { !failedAccountIDs.contains($0) }
+            )
+            let counts = try await repository.replaceSnapshot(
+                connection: connection,
+                accounts: normalizedAccounts,
+                transactions: transactionSync.transactions,
+                authoritativeTransactionAccountIDs: authoritativeAccountIDs
+            )
             await diagnostics.record(.newTransactions,
                                      details: ["count": String(counts.transactionsInserted)])
             await diagnostics.record(.duplicatesIgnored,

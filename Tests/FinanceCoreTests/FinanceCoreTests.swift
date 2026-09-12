@@ -43,6 +43,23 @@ final class FinanceCoreTests: XCTestCase {
         XCTAssertNotEqual(outgoing.deduplicationKey, incoming.deduplicationKey)
     }
 
+    func testAccountScopedNessieTransferUsesCurrentSandboxShape() throws {
+        let dto = try JSONDecoder().decode(
+            NessieTransfer.self,
+            from: Data("""
+                {"id":"transfer-current","transaction_date":"2026-09-12","amount":75,
+                 "status":"completed","description":"Student savings transfer"}
+                """.utf8)
+        )
+
+        let mapped = try NessieMapper.transfer(dto, account: account1)
+
+        XCTAssertEqual(mapped.externalTransactionID, "transfer:transfer-current:outflow")
+        XCTAssertEqual(mapped.direction, .outflow)
+        XCTAssertEqual(mapped.amountMinorUnits, 7_500)
+        XCTAssertTrue(mapped.isTransfer)
+    }
+
     func testDecimalMoneyConversionUsesExplicitRounding() throws {
         let amount = try XCTUnwrap(Decimal(string: "14.825"))
         let exact = try XCTUnwrap(Decimal(string: "0.29"))
@@ -106,6 +123,99 @@ final class FinanceCoreTests: XCTestCase {
         XCTAssertEqual(result.transactionsUpdated, 1)
         XCTAssertEqual(stored.count, 1)
         XCTAssertEqual(stored.first?.transactionDescription, "Corrected")
+    }
+
+    func testAuthoritativeSnapshotRemovesStaleNessieAccountsAndTransactions() async throws {
+        let repository = InMemoryFinancialRepository()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let connection = BankConnection(
+            id: "nessie|customer-1", provider: .nessie, externalCustomerID: "customer-1",
+            status: .connected, connectedAt: now
+        )
+        let firstAccounts = [account1, account2].map { BankingDomainMapper.account($0, syncedAt: now) }
+        let firstTransactions = [
+            externalTransaction(id: "purchase:one", accountID: "account-1", description: "One", amount: 500),
+            externalTransaction(id: "purchase:two", accountID: "account-2", description: "Two", amount: 700)
+        ].map { BankingDomainMapper.transaction($0, syncedAt: now) }
+        _ = try await repository.replaceSnapshot(
+            connection: connection, accounts: firstAccounts, transactions: firstTransactions,
+            authoritativeTransactionAccountIDs: ["account-1", "account-2"]
+        )
+
+        let refreshedAccount = ExternalBankAccount(
+            provider: .nessie, externalAccountID: "account-1", externalCustomerID: "customer-1",
+            name: "Checking", accountType: .checking, balanceMinorUnits: 42_000
+        )
+        _ = try await repository.replaceSnapshot(
+            connection: connection,
+            accounts: [BankingDomainMapper.account(refreshedAccount, syncedAt: now.addingTimeInterval(10))],
+            transactions: [], authoritativeTransactionAccountIDs: ["account-1"]
+        )
+
+        let storedAccounts = try await repository.accounts()
+        let storedTransactions = try await repository.transactions(from: nil, to: nil)
+        XCTAssertEqual(storedAccounts.count, 1)
+        XCTAssertEqual(storedAccounts.first?.balanceMinorUnits, 42_000)
+        XCTAssertTrue(storedTransactions.isEmpty)
+    }
+
+    func testPartialSnapshotKeepsTransactionsForFailedAccount() async throws {
+        let repository = InMemoryFinancialRepository()
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let connection = BankConnection(
+            id: "nessie|customer-1", provider: .nessie, externalCustomerID: "customer-1",
+            status: .connected, connectedAt: now
+        )
+        let accounts = [account1, account2].map { BankingDomainMapper.account($0, syncedAt: now) }
+        let checking = BankingDomainMapper.transaction(
+            externalTransaction(id: "purchase:checking", accountID: "account-1", description: "Checking", amount: 500),
+            syncedAt: now
+        )
+        let savings = BankingDomainMapper.transaction(
+            externalTransaction(id: "purchase:savings", accountID: "account-2", description: "Savings", amount: 700),
+            syncedAt: now
+        )
+        _ = try await repository.replaceSnapshot(
+            connection: connection, accounts: accounts, transactions: [checking, savings],
+            authoritativeTransactionAccountIDs: ["account-1", "account-2"]
+        )
+
+        _ = try await repository.replaceSnapshot(
+            connection: connection, accounts: accounts, transactions: [],
+            authoritativeTransactionAccountIDs: ["account-1"]
+        )
+
+        let stored = try await repository.transactions(from: nil, to: nil)
+        XCTAssertEqual(stored.map(\.externalAccountID), ["account-2"])
+    }
+
+    func testNessieOnlyFileStorePurgesPreviouslyCachedDemoData() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("FinanceCoreProviderFilter-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("store.json")
+        let unfiltered = try FileFinancialRepository(fileURL: fileURL)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let demoConnection = BankConnection(
+            id: "demo|customer", provider: .demo, externalCustomerID: "customer",
+            status: .connected, connectedAt: now
+        )
+        let demoAccount = FinancialAccount(
+            id: "demo|account", provider: .demo, externalAccountID: "account",
+            externalCustomerID: "customer", name: "Demo", accountType: .checking,
+            balanceMinorUnits: 999_999, currencyCode: "USD", lastSyncedAt: now
+        )
+        _ = try await unfiltered.persist(connection: demoConnection, accounts: [demoAccount], transactions: [])
+
+        let filtered = try FileFinancialRepository(fileURL: fileURL, allowedProviders: [.nessie])
+        try await filtered.load()
+
+        let connections = try await filtered.connections()
+        let accounts = try await filtered.accounts()
+        let transactions = try await filtered.transactions(from: nil, to: nil)
+        XCTAssertTrue(connections.isEmpty)
+        XCTAssertTrue(accounts.isEmpty)
+        XCTAssertTrue(transactions.isEmpty)
     }
 
     func testMultipleAccountsKeepTransactionsIsolatedWhenProviderIDsMatch() async throws {

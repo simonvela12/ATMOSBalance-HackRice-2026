@@ -18,11 +18,22 @@ public struct RepositorySyncCounts: Equatable, Sendable {
 public protocol FinancialDataRepository: Sendable {
     func persist(connection: BankConnection, accounts: [FinancialAccount],
                  transactions: [FinancialTransaction]) async throws -> RepositorySyncCounts
+    func replaceSnapshot(connection: BankConnection, accounts: [FinancialAccount],
+                         transactions: [FinancialTransaction],
+                         authoritativeTransactionAccountIDs: Set<String>) async throws -> RepositorySyncCounts
     func connections() async throws -> [BankConnection]
     func accounts() async throws -> [FinancialAccount]
     func transactions(from startDate: Date?, to endDate: Date?) async throws -> [FinancialTransaction]
     func transactions(accountID: String, from startDate: Date?,
                       to endDate: Date?) async throws -> [FinancialTransaction]
+}
+
+public extension FinancialDataRepository {
+    func replaceSnapshot(connection: BankConnection, accounts: [FinancialAccount],
+                         transactions: [FinancialTransaction],
+                         authoritativeTransactionAccountIDs: Set<String>) async throws -> RepositorySyncCounts {
+        try await persist(connection: connection, accounts: accounts, transactions: transactions)
+    }
 }
 
 public actor InMemoryFinancialRepository: FinancialDataRepository {
@@ -34,6 +45,31 @@ public actor InMemoryFinancialRepository: FinancialDataRepository {
 
     public func persist(connection: BankConnection, accounts: [FinancialAccount],
                         transactions: [FinancialTransaction]) throws -> RepositorySyncCounts {
+        let counts = upsert(accounts: accounts, transactions: transactions)
+        connectionStorage[connection.id] = connection
+        return counts
+    }
+
+    public func replaceSnapshot(connection: BankConnection, accounts: [FinancialAccount],
+                                transactions: [FinancialTransaction],
+                                authoritativeTransactionAccountIDs: Set<String>) async throws -> RepositorySyncCounts {
+        let incomingAccountIDs = Set(accounts.map(\.id))
+        accountStorage = accountStorage.filter { _, account in
+            account.provider != connection.provider ||
+            account.externalCustomerID != connection.externalCustomerID ||
+            incomingAccountIDs.contains(account.id)
+        }
+
+        let incomingTransactionKeys = Set(transactions.map(\.deduplicationKey))
+        let incomingExternalAccountIDs = Set(accounts.map(\.externalAccountID))
+        transactionStorage = transactionStorage.filter { _, transaction in
+            guard transaction.provider == connection.provider,
+                  transaction.externalCustomerID == connection.externalCustomerID else { return true }
+            guard incomingExternalAccountIDs.contains(transaction.externalAccountID) else { return false }
+            guard authoritativeTransactionAccountIDs.contains(transaction.externalAccountID) else { return true }
+            return incomingTransactionKeys.contains(transaction.deduplicationKey)
+        }
+
         let counts = upsert(accounts: accounts, transactions: transactions)
         connectionStorage[connection.id] = connection
         return counts

@@ -113,7 +113,7 @@ private struct V2Home: View {
                 .font(.title2).frame(width: 40, height: 40)
                 .background(.white.opacity(0.08), in: Circle())
             VStack(alignment: .leading, spacing: 3) {
-                Text(linked ? "Bank data connected" : "Sample plan active").font(.headline)
+                Text(linked ? "Bank data connected" : "Bank connection required").font(.headline)
                 Text(sourceText).font(.caption).foregroundStyle(.white.opacity(0.52))
             }
             Spacer()
@@ -127,7 +127,7 @@ private struct V2Home: View {
         case .loadingCache: return "Loading saved bank history…"
         case .failed(_): return "Using saved data; refresh needs attention."
         case .connected: return "Normalized bank data is feeding the plan."
-        case .idle: return linked ? "Linked data is available." : "No sample value is presented as live bank data."
+        case .idle: return linked ? "Linked data is available." : "Connect Nessie to load balances and transactions."
         }
     }
 
@@ -320,9 +320,6 @@ private enum V2Data {
     static var calendar: Calendar { var value = Calendar(identifier: .gregorian); value.timeZone = TimeZone(secondsFromGMT: 0)!; return value }
     static func day(_ date: Date) -> Date { calendar.startOfDay(for: date) }
     static func horizon(from date: Date) -> Date { calendar.date(byAdding: .day, value: 79, to: date) ?? date }
-    static let tuitionID = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
-    static let miamiID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
-
     struct ContextItem: Identifiable {
         let id: String; let title: String; let subtitle: String; let amount: Double?; let date: Date?; let subject: QualitativeNoteSubject; let suggestedText: String; let goalID: UUID?
         var context: QualitativeNoteContext { QualitativeNoteContext(subject: subject, referenceAmount: amount, referenceDate: date, label: title) }
@@ -338,26 +335,16 @@ private enum V2Data {
         let bankExpenses = usable.filter { $0.direction == .outflow }.map { tx in
             ExpenseEvent(amount: Double(tx.amountMinorUnits) / 100, date: day(tx.transactionDate), category: label(tx), essential: false, committed: false)
         }
-        let sampleIncomes = currentCash == nil ? [IncomeEvent(amount: 650, date: calendar.date(byAdding: .day, value: -6, to: asOf) ?? asOf, source: "Campus job", type: .irregular, confidence: 1)] : []
-        let sampleExpenses = currentCash == nil ? [ExpenseEvent(amount: 180, date: calendar.date(byAdding: .day, value: -2, to: asOf) ?? asOf, category: "Group dinner", essential: false, committed: false)] : []
-        let scheduled = [
-            ExpenseEvent(amount: 900, date: calendar.date(byAdding: .day, value: 3, to: asOf) ?? asOf, category: "Rent", essential: true, committed: true),
-            ExpenseEvent(amount: 80, date: calendar.date(byAdding: .day, value: 6, to: asOf) ?? asOf, category: "Phone", essential: true, committed: true),
-            ExpenseEvent(amount: 25, date: calendar.date(byAdding: .day, value: 18, to: asOf) ?? asOf, category: "Streaming subscription", essential: false, committed: true)
-        ]
         return FinancialProfile(
-            currentCash: currentCash ?? 3_200,
+            currentCash: currentCash ?? 0,
             asOfDate: asOf,
-            personalReserveSteps: [PersonalReserveStep(effectiveDate: asOf, minimumCash: 500, note: "Confirmed personal reserve")],
+            personalReserveSteps: [],
             institutionalMinimums: [],
-            incomeEvents: bankIncomes + sampleIncomes,
-            expenseEvents: bankExpenses + sampleExpenses + scheduled,
-            goals: [
-                Goal(id: tuitionID, name: "Tuition installment", targetAmount: 350, deadline: calendar.date(byAdding: .day, value: 16, to: asOf) ?? asOf, priority: .mandatory),
-                Goal(id: miamiID, name: "Miami", targetAmount: 900, deadline: calendar.date(byAdding: .day, value: 38, to: asOf) ?? asOf, priority: .flexible)
-            ],
-            weeklySpendingHistory: currentCash == nil ? sampleHistory(asOf) : history(usable, asOf),
-            spendingPolicy: SpendingPolicy(lookbackWeeks: 6, bufferWeeks: 2, manualMinimumBuffer: 200)
+            incomeEvents: bankIncomes,
+            expenseEvents: bankExpenses,
+            goals: [],
+            weeklySpendingHistory: history(usable, asOf),
+            spendingPolicy: SpendingPolicy(lookbackWeeks: 6, bufferWeeks: 2, manualMinimumBuffer: 0)
         )
     }
 
@@ -370,15 +357,6 @@ private enum V2Data {
         if let tx = usable.first(where: { $0.direction == .outflow }) {
             result.append(ContextItem(id: "expense-\(tx.id)", title: label(tx), subtitle: "-\(money(tx)) · \(dateText(tx.transactionDate))", amount: Double(tx.amountMinorUnits) / 100, date: day(tx.transactionDate), subject: .expense, suggestedText: "They owe me for this and will pay me next Friday.", goalID: nil))
         }
-        if result.isEmpty {
-            let now = day(Date())
-            result.append(ContextItem(id: "sample-income", title: "Campus job", subtitle: "+$650 recorded deposit", amount: 650, date: calendar.date(byAdding: .day, value: -6, to: now), subject: .income, suggestedText: "I get this every two weeks.", goalID: nil))
-            result.append(ContextItem(id: "sample-expense", title: "Group dinner", subtitle: "-$180 recorded expense", amount: 180, date: calendar.date(byAdding: .day, value: -2, to: now), subject: .expense, suggestedText: "They owe me for this and will pay me next Friday.", goalID: nil))
-        }
-        let now = day(Date())
-        result.append(ContextItem(id: "subscription", title: "Streaming subscription", subtitle: "$25 scheduled expense", amount: 25, date: calendar.date(byAdding: .day, value: 18, to: now), subject: .expense, suggestedText: "This is optional and I can cancel it.", goalID: nil))
-        result.append(ContextItem(id: "miami", title: "Miami", subtitle: "$900 flexible goal", amount: 900, date: calendar.date(byAdding: .day, value: 38, to: now), subject: .goal, suggestedText: "This goal can wait if I really need it to.", goalID: miamiID))
-        result.append(ContextItem(id: "reserve", title: "Cash reserve", subtitle: "Personal rule", amount: nil, date: nil, subject: .general, suggestedText: "I need to keep at least $500 untouched.", goalID: nil))
         return result
     }
 
@@ -395,9 +373,6 @@ private enum V2Data {
         return grouped.filter { $0.key >= earliest && $0.key <= asOf }.map { WeeklySpendingSample(weekStart: $0.key, totalVariableSpending: $0.value.reduce(0) { $0 + Double($1.amountMinorUnits) / 100 }) }.sorted { $0.weekStart < $1.weekStart }
     }
 
-    private static func sampleHistory(_ asOf: Date) -> [WeeklySpendingSample] {
-        [220, 260, 245, 275, 230, 255].enumerated().map { index, amount in WeeklySpendingSample(weekStart: calendar.date(byAdding: .day, value: -7 * (5 - index), to: asOf) ?? asOf, totalVariableSpending: Double(amount)) }
-    }
     private static func label(_ tx: FinanceCore.FinancialTransaction) -> String { let value = (tx.merchantName ?? tx.transactionDescription).trimmingCharacters(in: .whitespacesAndNewlines); return value.isEmpty ? "Bank transaction" : value }
     private static func money(_ tx: FinanceCore.FinancialTransaction) -> String { (Double(tx.amountMinorUnits) / 100).formatted(.currency(code: "USD").precision(.fractionLength(0))) }
     private static func dateText(_ date: Date) -> String { date.formatted(.dateTime.month(.abbreviated).day()) }

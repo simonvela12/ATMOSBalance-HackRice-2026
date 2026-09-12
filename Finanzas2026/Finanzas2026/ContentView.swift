@@ -120,7 +120,7 @@ struct ContentView: View {
     }
 
     private var month: MonthForecast {
-        MockForecast.data(
+        ForecastData.data(
             for: selectedMonth,
             including: addedEntries,
             excludingForecastDays: deletedForecastDays,
@@ -367,7 +367,7 @@ struct ContentView: View {
                 HStack(spacing: 8) {
                 ForEach(ForecastMonth.allCases) { forecastMonth in
                     let isSelected = forecastMonth == selectedMonth
-                    let forecastWeather = MockForecast.data(
+                    let forecastWeather = ForecastData.data(
                         for: forecastMonth,
                         including: addedEntries,
                         excludingForecastDays: deletedForecastDays,
@@ -576,11 +576,7 @@ struct ContentView: View {
 
     private var balanceChart: some View {
         BalanceChartCard(
-            points: MockForecast.balancePoints(
-                including: addedEntries,
-                excludingForecastDays: deletedForecastDays,
-                excludingOccurrences: excludedOccurrences
-            )
+            points: liveContext.balancePoints()
         )
             .padding(.horizontal, 20)
             .padding(.top, 16)
@@ -826,7 +822,7 @@ private struct BalanceChartCard: View {
                     .symbolSize(point.isAnchor ? 34 : 15)
                 }
 
-                RuleMark(x: .value("Today", MockForecast.todayDate))
+                RuleMark(x: .value("Today", ForecastData.todayDate))
                     .foregroundStyle(.white.opacity(0.3))
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 4]))
                     .annotation(position: .top, alignment: .leading) {
@@ -1189,7 +1185,7 @@ private struct AddGoalSheet: View {
     @State private var name = ""
     @State private var amountText = ""
     @State private var savedText = ""
-    @State private var targetDate = Calendar.current.date(byAdding: .month, value: 4, to: MockForecast.todayDate) ?? MockForecast.todayDate
+    @State private var targetDate = Calendar.current.date(byAdding: .month, value: 4, to: ForecastData.todayDate) ?? ForecastData.todayDate
     @State private var symbol = "airplane"
 
     init(existingGoal: FinancialGoal? = nil, onSave: @escaping (FinancialGoal) -> Void) {
@@ -1198,7 +1194,7 @@ private struct AddGoalSheet: View {
         _name = State(initialValue: existingGoal?.name ?? "")
         _amountText = State(initialValue: existingGoal.map { String($0.targetAmount) } ?? "")
         _savedText = State(initialValue: existingGoal.map { String($0.saved) } ?? "")
-        _targetDate = State(initialValue: existingGoal?.targetDate ?? Calendar.current.date(byAdding: .month, value: 4, to: MockForecast.todayDate) ?? MockForecast.todayDate)
+        _targetDate = State(initialValue: existingGoal?.targetDate ?? Calendar.current.date(byAdding: .month, value: 4, to: ForecastData.todayDate) ?? ForecastData.todayDate)
         _symbol = State(initialValue: existingGoal?.symbol ?? "airplane")
     }
 
@@ -1232,7 +1228,7 @@ private struct AddGoalSheet: View {
                     }
 
                     EntryCard(title: "TARGET DATE") {
-                        DatePicker("Goal date", selection: $targetDate, in: MockForecast.todayDate..., displayedComponents: .date)
+                        DatePicker("Goal date", selection: $targetDate, in: ForecastData.todayDate..., displayedComponents: .date)
                             .tint(.white)
                     }
 
@@ -1701,7 +1697,7 @@ private struct DayDetailSheet: View {
                             .padding(14)
                     }
 
-                    Text("This breakdown uses demonstration data and will be replaced by the team’s financial model.")
+                    Text(day.isBankImported ? "This breakdown comes from synchronized Nessie activity." : "This breakdown comes from your saved plan and the financial model.")
                         .font(.helvetica(.caption))
                         .foregroundStyle(.white.opacity(0.52))
                         .multilineTextAlignment(.center)
@@ -1784,7 +1780,7 @@ private struct AddEntrySheet: View {
     @State private var entryKind = EntryKind.payment
     @State private var entryName = ""
     @State private var amountText = ""
-    @State private var entryDate = MockForecast.todayDate
+    @State private var entryDate = ForecastData.todayDate
     @State private var schedule = EntrySchedule.oneTime
     @State private var repeatEvery = 1
     @State private var repeatUnit = RepeatUnit.month
@@ -1964,7 +1960,7 @@ private struct AddEntrySheet: View {
                     .disabled(!canSave)
                     .opacity(canSave ? 1 : 0.48)
 
-                    Label("Entries update this demo forecast immediately", systemImage: "checkmark.circle")
+                    Label("Entries update your forecast immediately", systemImage: "checkmark.circle")
                         .font(.helvetica(.caption))
                         .foregroundStyle(.white.opacity(0.52))
                         .multilineTextAlignment(.center)
@@ -2566,6 +2562,35 @@ private struct LiveFinancialContext {
         return timeline.last { calendar.startOfDay(for: $0.date) <= day }?.projectedCash
     }
 
+    func balancePoints() -> [BalancePoint] {
+        guard let profile else { return [] }
+        let today = calendar.startOfDay(for: profile.asOfDate)
+        let settled = transactions
+            .filter { !$0.isPending && !$0.isTransfer && $0.transactionDate <= today }
+            .sorted { $0.transactionDate < $1.transactionDate }
+        var reconstructed = profile.currentCash - settled.reduce(0) {
+            $0 + Double($1.signedAmountMinorUnits) / 100
+        }
+        var points: [BalancePoint] = settled.map { transaction in
+            reconstructed += Double(transaction.signedAmountMinorUnits) / 100
+            return BalancePoint(
+                id: "actual-\(transaction.id)", date: transaction.transactionDate,
+                balance: reconstructed, series: .actual, isAnchor: true
+            )
+        }
+        points.append(
+            BalancePoint(id: "actual-current", date: today, balance: profile.currentCash,
+                         series: .actual, isAnchor: true)
+        )
+        points += timeline
+            .filter { $0.date >= today }
+            .map {
+                BalancePoint(id: "expected-\($0.date.timeIntervalSince1970)", date: $0.date,
+                             balance: $0.projectedCash, series: .expected, isAnchor: false)
+            }
+        return points.sorted { $0.date == $1.date ? $0.series.rawValue < $1.series.rawValue : $0.date < $1.date }
+    }
+
     // MARK: Month figures
 
     /// Balance at the end of a month. Future months read the projected path;
@@ -2612,67 +2637,8 @@ private struct LiveFinancialContext {
 
 }
 
-private enum MockForecast {
+private enum ForecastData {
     static var todayDate: Date { Calendar(identifier: .gregorian).startOfDay(for: Date()) }
-    static let balancePoints: [BalancePoint] = []
-
-    static func balancePoints(
-        including entries: [FinancialEntry],
-        excludingForecastDays: Set<String> = [],
-        excludingOccurrences: Set<String> = []
-    ) -> [BalancePoint] {
-        let horizon = makeDate(year: 2027, month: 9, day: 30)
-        let occurrences = entryOccurrences(
-            for: entries,
-            through: horizon,
-            excluding: excludingOccurrences,
-            nameOverrides: [:]
-        )
-        let deletedAdjustments = forecastDeletionAdjustments(for: excludingForecastDays)
-
-        let adjustedBasePoints = Self.balancePoints.map { point in
-            let adjustment = occurrences
-                .filter { $0.date <= point.date }
-                .reduce(0) { $0 + $1.entry.signedAmount }
-                + deletedAdjustments
-                    .filter { $0.date <= point.date }
-                    .reduce(0) { $0 + $1.amount }
-
-            return BalancePoint(
-                id: point.id,
-                date: point.date,
-                balance: point.balance + Double(adjustment),
-                series: point.series,
-                isAnchor: point.isAnchor
-            )
-        }
-
-        let entryPoints = occurrences.compactMap { occurrence -> BalancePoint? in
-            guard occurrence.date >= makeDate(year: 2026, month: 5, day: 1) else { return nil }
-            let baseBalance = Self.balancePoints
-                .filter { $0.date <= occurrence.date }
-                .last?.balance ?? Self.balancePoints.first?.balance ?? 0
-            let adjustment = occurrences
-                .filter { $0.date <= occurrence.date }
-                .reduce(0) { $0 + $1.entry.signedAmount }
-                + deletedAdjustments
-                    .filter { $0.date <= occurrence.date }
-                    .reduce(0) { $0 + $1.amount }
-
-            return BalancePoint(
-                id: "entry-\(occurrence.entry.id.uuidString)-\(occurrence.date.timeIntervalSince1970)",
-                date: occurrence.date,
-                balance: baseBalance + Double(adjustment),
-                series: occurrence.date <= todayDate ? .actual : .expected,
-                isAnchor: true
-            )
-        }
-
-        return (adjustedBasePoints + entryPoints).sorted {
-            if $0.date == $1.date { return $0.series.rawValue < $1.series.rawValue }
-            return $0.date < $1.date
-        }
-    }
 
     static func data(
         for month: ForecastMonth,

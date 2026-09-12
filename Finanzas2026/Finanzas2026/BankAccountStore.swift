@@ -31,7 +31,9 @@ final class BankAccountStore: ObservableObject {
         let storeURL = support
             .appendingPathComponent("Finanzas2026", isDirectory: true)
             .appendingPathComponent("nessie-store.json")
-        repository = try! FileFinancialRepository(fileURL: storeURL)
+        // This app store is intentionally Nessie-only. Old demo/provider records
+        // from previous builds are discarded when the cache is loaded.
+        repository = try! FileFinancialRepository(fileURL: storeURL, allowedProviders: [.nessie])
 
         Task { [weak self] in
             await self?.reloadCachedData()
@@ -72,7 +74,7 @@ final class BankAccountStore: ObservableObject {
             // A sync can succeed and still return no accounts. Without this the app
             // reports success while `isLinked` stays false, stranding the user on the
             // connect screen with no explanation.
-            guard !accounts.isEmpty else {
+            guard (lastSyncResult?.accountsFetched ?? 0) > 0 else {
                 syncServices.removeValue(forKey: "nessie|\(customerID)")
                 phase = .failed("Connected to Nessie, but customer \(customerID) has no accounts. Check the customer ID.")
                 return
