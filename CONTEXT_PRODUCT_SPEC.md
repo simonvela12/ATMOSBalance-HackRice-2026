@@ -82,6 +82,13 @@ Examples the model must support:
 - Future expenses feed the same plan used by Calendar, Safe to Spend, Plans, and What-If.
 - If an expense is marked **Maybe** reducible/cancelable, the normal forecast still counts the **full expense amount**. The app may separately show the full amount as potential savings if the user later reduces or cancels it.
 - The app does not estimate a partial reduction for **Maybe** expenses.
+- Future or recurring expenses may optionally have an **expected / minimum / maximum** amount when the user knows the cost is variable.
+- Variable-expense ranges are optional; a single expected amount remains enough for the simple path.
+- When an expense range is supplied, scenario treatment is deterministic and inverted relative to income:
+  - **Conservative = maximum expense**
+  - **Expected = expected expense**
+  - **Optimistic = minimum expense**
+- A range never creates an expense event by itself; the user must still provide or confirm the date/recurrence.
 - Reimbursements / shared expenses.
 - Partial reimbursement is confirmed: the user enters the **exact amount expected back** and the **expected repayment date**.
 - The reimbursement amount does not have to equal the original expense.
@@ -157,7 +164,9 @@ Examples:
 - Must pay? Yes / No
 - Can reduce or cancel? No / Maybe / Yes
 - Recurrence: No / Weekly / Every 2 weeks / Monthly
-- If flexibility is **Maybe**, the full amount remains in the normal forecast until the user explicitly changes the plan
+- Optional advanced range for variable costs: Minimum / Expected / Maximum
+- If a range exists, scenario mapping is Conservative = maximum, Expected = expected, Optimistic = minimum
+- If flexibility is **Maybe**, the full expected amount remains in the normal forecast until the user explicitly changes the plan
 - The confirmation preview must show exactly what will be added to the future cash path before applying it
 
 ## Human-first expense questions
@@ -237,6 +246,7 @@ Confidence behavior:
 8. Future income can optionally be assigned a **purpose / earmark** such as General support, Tuition, Rent, Travel, or Other. Earmarked funds enter the dated cash balance but should not automatically inflate discretionary Safe to Spend; they remain associated with their intended obligation or goal.
 9. A single income event may be **split across multiple purposes**. Example: a $3,000 deposit can allocate $2,000 to Tuition and $1,000 to General support. Any unallocated remainder stays general cash, and the UI must make each allocation explicit before confirmation.
 10. If an earmarked purpose later disappears or is already fully satisfied, the earmarked money is **not automatically released**. The app asks the user to choose **Move to General cash / Reassign to another purpose / Keep reserved**. Until confirmed, the funds remain reserved.
+11. Variable expenses may use an optional **minimum / expected / maximum** range. Scenario mapping is inverted versus income: **Conservative = maximum expense, Expected = expected expense, Optimistic = minimum expense**.
 
 ## Open decisions
 
