@@ -37,6 +37,12 @@ The product must work well for college students and other users with sparse, irr
 - Irregular / uncertain income.
 - Weekly, biweekly, and monthly recurrence only when explicitly provided or confirmed by the user.
 - Expected future income with amount, date, and confidence.
+- A future income date may be either an **exact date** or an optional **date window** when timing is uncertain.
+- Date windows use **earliest / expected / latest** dates. The user should not be forced to invent an exact day if they only know a likely period.
+- For income date windows, scenario timing is deterministic:
+  - **Conservative = latest date**
+  - **Expected = expected date**
+  - **Optimistic = earliest date**
 - Confidence UX is confirmed as: **Confirmed 100% / Likely 70% / Possible 30% / Custom %**.
 - Custom confidence accepts an explicit user-entered percentage such as 55%, 65%, or 80%.
 - For irregular income, expected-value planning may use `amount × confidence` while scenario views can remain conservative / expected / optimistic.
@@ -64,6 +70,7 @@ Examples the model must support:
 
 - `$550 every 2 weeks`, optionally with `$450 minimum / $650 maximum`.
 - `$800 on Sep 25`, likely 70%, and no other expected income afterward.
+- `$2,000 from family sometime in October`, represented as Earliest Oct 1 / Expected Oct 15 / Latest Oct 31.
 - `$0 expected income for the next 3 months`.
 - `$3,000 family transfer on Dec 1`, one time.
 - `$3,000 family transfer on Dec 1`, split as `$2,000 Tuition + $1,000 General support`.
@@ -78,6 +85,11 @@ Examples the model must support:
 - Recurring expenses.
 - Future expenses not yet visible in bank data are explicitly supported.
 - A future expense must capture: **amount, date, must-pay status, flexibility/cancelability, and recurrence**.
+- A future expense date may be exact or use an optional **earliest / expected / latest** date window.
+- For expense date windows, scenario timing is intentionally inverted versus income:
+  - **Conservative = earliest date**
+  - **Expected = expected date**
+  - **Optimistic = latest date**
 - Future expense recurrence options are: **No / Weekly / Every 2 weeks / Monthly**.
 - Future expenses feed the same plan used by Calendar, Safe to Spend, Plans, and What-If.
 - If an expense is marked **Maybe** reducible/cancelable, the normal forecast still counts the **full expense amount**. The app may separately show the full amount as potential savings if the user later reduces or cancels it.
@@ -128,7 +140,7 @@ Examples:
 
 **Expected income**
 - Amount
-- Date
+- Date: exact date OR optional Earliest / Expected / Latest window
 - Confidence: Confirmed 100% / Likely 70% / Possible 30% / Custom %
 - Recurrence defaults to **No** unless the user explicitly chooses otherwise
 - Optional purpose allocation(s): General support / Tuition / Rent / Travel / Other
@@ -144,7 +156,7 @@ Examples:
 
 **One-time family/support income**
 - Amount
-- Expected date
+- Exact expected date OR Earliest / Expected / Latest window
 - Confidence
 - Recurrence: No
 - Optional split purpose allocation
@@ -155,12 +167,12 @@ Examples:
 **Someone owes me**
 - Original transaction anchor
 - Amount expected back — required and editable
-- Repayment date — required
+- Repayment date — exact date or date window if uncertain
 - Confirmation preview should show the original expense and the later reimbursement as separate dated cash-flow events
 
 **Future expense**
 - Amount — required
-- Date — required
+- Date — exact date OR optional Earliest / Expected / Latest window
 - Must pay? Yes / No
 - Can reduce or cancel? No / Maybe / Yes
 - Recurrence: No / Weekly / Every 2 weeks / Monthly
@@ -226,6 +238,7 @@ Confidence behavior:
 - Never present demo/sample values as real linked-bank data.
 - Never silently infer recurrence from transaction history alone.
 - Never silently guess missing amount, date, cadence, reimbursement amount, or purpose.
+- If the user only knows a date range, preserve that uncertainty instead of forcing or silently inventing an exact date.
 - Preserve deterministic and explainable planning behavior.
 - Do not introduce opaque financial scores or probability claims beyond explicit user-provided confidence.
 - Zero-income periods are valid states, not missing data to be filled automatically.
@@ -247,6 +260,7 @@ Confidence behavior:
 9. A single income event may be **split across multiple purposes**. Example: a $3,000 deposit can allocate $2,000 to Tuition and $1,000 to General support. Any unallocated remainder stays general cash, and the UI must make each allocation explicit before confirmation.
 10. If an earmarked purpose later disappears or is already fully satisfied, the earmarked money is **not automatically released**. The app asks the user to choose **Move to General cash / Reassign to another purpose / Keep reserved**. Until confirmed, the funds remain reserved.
 11. Variable expenses may use an optional **minimum / expected / maximum** range. Scenario mapping is inverted versus income: **Conservative = maximum expense, Expected = expected expense, Optimistic = minimum expense**.
+12. Future income, expenses, and reimbursements may use an optional **Earliest / Expected / Latest** date window when timing is uncertain. Scenario timing is deterministic: for income, Conservative = latest and Optimistic = earliest; for expenses, Conservative = earliest and Optimistic = latest; Expected uses the expected date in both cases.
 
 ## Open decisions
 
