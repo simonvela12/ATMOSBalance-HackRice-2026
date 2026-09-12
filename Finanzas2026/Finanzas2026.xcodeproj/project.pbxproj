@@ -12,6 +12,7 @@
 		A10000000000000000000004 /* FinancialCore in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000002 /* FinancialCore */; };
 		A10000000000000000000005 /* BankAccountStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* BankAccountStore.swift */; };
 		A10000000000000000000009 /* AppFinancialData.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* AppFinancialData.swift */; };
+		A1000000000000000000000A /* GeminiExplainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* GeminiExplainer.swift */; };
 		A10000000000000000000006 /* FinanceCore in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000004 /* FinanceCore */; };
 		A10000000000000000000007 /* ProductRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* ProductRootView.swift */; };
 /* End PBXBuildFile section */
@@ -23,6 +24,7 @@
 		A20000000000000000000004 /* FinancialCoreBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinancialCoreBridge.swift; sourceTree = "<group>"; };
 		A20000000000000000000005 /* BankAccountStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BankAccountStore.swift; sourceTree = "<group>"; };
 		A20000000000000000000009 /* AppFinancialData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppFinancialData.swift; sourceTree = "<group>"; };
+		A2000000000000000000000A /* GeminiExplainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeminiExplainer.swift; sourceTree = "<group>"; };
 		A20000000000000000000006 /* ProductRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProductRootView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -56,6 +58,7 @@
 				A20000000000000000000004 /* FinancialCoreBridge.swift */,
 				A20000000000000000000005 /* BankAccountStore.swift */,
 				A20000000000000000000009 /* AppFinancialData.swift */,
+				A2000000000000000000000A /* GeminiExplainer.swift */,
 			);
 			path = Finanzas2026;
 			sourceTree = "<group>";
@@ -140,6 +143,7 @@
 				A10000000000000000000003 /* FinancialCoreBridge.swift in Sources */,
 				A10000000000000000000005 /* BankAccountStore.swift in Sources */,
 				A10000000000000000000009 /* AppFinancialData.swift in Sources */,
+				A1000000000000000000000A /* GeminiExplainer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

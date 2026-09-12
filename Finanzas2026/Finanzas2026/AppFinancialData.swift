@@ -110,3 +110,51 @@ enum AppFinancialData {
             .sorted { $0.weekStart < $1.weekStart }
     }
 }
+
+/// Savings that accrue by spending less than usual.
+///
+/// The engine already establishes a typical weekly spending rate from real
+/// transaction history. Any week that came in under that rate left money behind,
+/// and that money is what funds goals. Weeks that came in over the rate do not
+/// create a debt — overspending already shows up in the forecast, and charging a
+/// goal for it as well would say the same thing twice.
+enum SavingsAccrual {
+
+    /// Total accrued across completed weeks of history.
+    static func accrued(
+        profile: FinancialProfile,
+        calendar: Calendar = AppFinancialData.calendar
+    ) -> Double {
+        let typical = FinancialEngine.typicalWeeklySpending(profile: profile, calendar: calendar)
+        guard typical > 0 else { return 0 }
+
+        // The week in progress is not a saving yet — its spending has not finished.
+        let currentWeekStart = calendar.dateInterval(of: .weekOfYear, for: profile.asOfDate)?.start
+
+        return profile.weeklySpendingHistory.reduce(0) { total, week in
+            if let currentWeekStart, week.weekStart >= currentWeekStart { return total }
+            return total + max(0, typical - week.totalVariableSpending)
+        }
+    }
+
+    struct GoalNeed {
+        let id: UUID
+        let remaining: Double
+        let deadline: Date
+    }
+
+    /// Spreads what was saved across goals, earliest deadline first, never giving
+    /// a goal more than it still needs.
+    static func allocate(_ pot: Double, across goals: [GoalNeed]) -> [UUID: Double] {
+        var remainingPot = max(0, pot)
+        var allocation: [UUID: Double] = [:]
+
+        for goal in goals.sorted(by: { $0.deadline < $1.deadline }) {
+            guard remainingPot > 0 else { break }
+            let share = min(remainingPot, max(0, goal.remaining))
+            allocation[goal.id] = share
+            remainingPot -= share
+        }
+        return allocation
+    }
+}

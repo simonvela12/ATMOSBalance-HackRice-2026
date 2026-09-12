@@ -38,3 +38,18 @@ Nothing is seeded with example data.
 
 An account with no goals and no entries has none — the forecast reflects that
 rather than inventing a plan.
+
+## Gemini (optional)
+
+The What-If screen can explain the engine's verdict in plain language. Tap
+**Add Gemini key** and paste a key from Google AI Studio.
+
+The key is entered at runtime and stored in `UserDefaults` on the device. It is
+deliberately not committed: a key compiled into the binary can be extracted from
+it, and a shared key means a shared quota. Each developer uses their own.
+
+The model is only ever given a decision `FinancialCore` has already made, and is
+instructed not to re-judge it or introduce numbers. If Gemini is unreachable the
+screen still shows the engine's own figures.
+
+Default model is `gemini-3.5-flash`, overridable via the `gemini.model` default.

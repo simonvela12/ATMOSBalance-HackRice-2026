@@ -21,6 +21,8 @@ struct ContentView: View {
     @State private var excludedOccurrences: Set<String> = []
     @State private var occurrenceNameOverrides: [String: String] = [:]
     @State private var minimumCashReserve: Double?
+    @State private var savingsAllocation: [UUID: Double] = [:]
+    @State private var savingsPot: Double = 0
 
     /// Rebuilding the profile and the projected path is expensive, and the forecast
     /// views read `month` many times per render, so it is cached and refreshed only
@@ -46,18 +48,27 @@ struct ContentView: View {
         occurrenceNameOverrides = plan.occurrenceNameOverrides
     }
 
-    /// The user's own goals and scheduled entries, translated into the engine's
-    /// vocabulary. Goals the user adds are flexible by default; nothing is assumed
-    /// on their behalf.
-    private var engineGoals: [FinancialCore.Goal] {
+    /// Goals with savings accrued from underspending folded in, for display.
+    private var displayGoals: [FinancialGoal] {
         goals.map { goal in
-            FinancialCore.Goal(
+            let accrued = Int((savingsAllocation[goal.id] ?? 0).rounded())
+            return goal.withSaved(min(goal.targetAmount, goal.saved + accrued))
+        }
+    }
+
+    /// The user's goals in the engine's vocabulary. Must-happen goals are
+    /// subtracted from the projected path; nice-to-have goals stay out of the
+    /// baseline and appear as trade-offs instead.
+    private func engineGoals(allocation: [UUID: Double]) -> [FinancialCore.Goal] {
+        goals.map { goal in
+            let accrued = allocation[goal.id] ?? 0
+            return FinancialCore.Goal(
                 id: goal.id,
                 name: goal.name,
                 targetAmount: Double(goal.targetAmount),
-                amountAlreadyPaid: Double(goal.saved),
+                amountAlreadyPaid: min(Double(goal.targetAmount), Double(goal.saved) + accrued),
                 deadline: goal.targetDate,
-                priority: .flexible
+                priority: goal.mustHappen ? .mandatory : .flexible
             )
         }
     }
@@ -98,10 +109,32 @@ struct ContentView: View {
         let asOf = AppFinancialData.day(Date())
         let horizon = AppFinancialData.horizon(from: asOf)
         let planned = plannedEvents(asOf: asOf, horizon: horizon)
+
+        // Savings accrue from spending history alone, so this base profile carries
+        // no goals — that avoids goals depending on an allocation that depends on
+        // goals.
+        let base = AppFinancialData.profile(
+            currentCash: bankStore.totalAvailableCash,
+            transactions: bankStore.transactions
+        )
+        let pot = SavingsAccrual.accrued(profile: base)
+        let allocation = SavingsAccrual.allocate(
+            pot,
+            across: goals.map {
+                SavingsAccrual.GoalNeed(
+                    id: $0.id,
+                    remaining: Double(max(0, $0.targetAmount - $0.saved)),
+                    deadline: $0.targetDate
+                )
+            }
+        )
+        savingsPot = pot
+        savingsAllocation = allocation
+
         let profile = AppFinancialData.profile(
             currentCash: bankStore.totalAvailableCash,
             transactions: bankStore.transactions,
-            goals: engineGoals,
+            goals: engineGoals(allocation: allocation),
             plannedIncome: planned.income,
             plannedExpenses: planned.expenses,
             minimumCashReserve: minimumCashReserve
@@ -220,7 +253,7 @@ struct ContentView: View {
             .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showingWhatIf) {
-            WhatIfSheet(accountBalance: month.accountBalance, goals: goals)
+            WhatIfSheet(profile: liveContext.profile, goals: displayGoals)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
@@ -437,17 +470,20 @@ struct ContentView: View {
 
     private var goalsSection: some View {
         GoalsCard(
-            goals: goals,
+            goals: displayGoals,
             onAdd: {
                 goalBeingEdited = nil
                 showingAddGoal = true
             },
             onEdit: { goal in
-                goalBeingEdited = goal
+                // Edit the stored goal, not the display copy — the display copy has
+                // accrued savings folded into `saved`, and saving that back would
+                // bank the accrual as a manual contribution and count it twice.
+                goalBeingEdited = goals.first { $0.id == goal.id } ?? goal
                 showingAddGoal = true
             },
             onDelete: { goal in
-                goalPendingDeletion = goal
+                goalPendingDeletion = goals.first { $0.id == goal.id } ?? goal
             }
         )
         .padding(.horizontal, 20)
@@ -1191,6 +1227,7 @@ private struct AddGoalSheet: View {
     @State private var savedText = ""
     @State private var targetDate = Calendar.current.date(byAdding: .month, value: 4, to: MockForecast.todayDate) ?? MockForecast.todayDate
     @State private var symbol = "airplane"
+    @State private var mustHappen = false
 
     init(existingGoal: FinancialGoal? = nil, onSave: @escaping (FinancialGoal) -> Void) {
         self.existingGoal = existingGoal
@@ -1200,6 +1237,7 @@ private struct AddGoalSheet: View {
         _savedText = State(initialValue: existingGoal.map { String($0.saved) } ?? "")
         _targetDate = State(initialValue: existingGoal?.targetDate ?? Calendar.current.date(byAdding: .month, value: 4, to: MockForecast.todayDate) ?? MockForecast.todayDate)
         _symbol = State(initialValue: existingGoal?.symbol ?? "airplane")
+        _mustHappen = State(initialValue: existingGoal?.mustHappen ?? false)
     }
 
     private var targetAmount: Int { Int(amountText.filter(\.isNumber)) ?? 0 }
@@ -1236,6 +1274,21 @@ private struct AddGoalSheet: View {
                             .tint(.white)
                     }
 
+                    EntryCard(title: "PRIORITY") {
+                        Picker("Goal priority", selection: $mustHappen) {
+                            Text("Nice to have").tag(false)
+                            Text("Must happen").tag(true)
+                        }
+                        .pickerStyle(.segmented)
+
+                        Text(mustHappen
+                             ? "Set aside from safe-to-spend right away."
+                             : "Shown as a trade-off instead of reducing what you can spend.")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.55))
+                            .padding(.top, 6)
+                    }
+
                     EntryCard(title: "ICON") {
                         Picker("Goal icon", selection: $symbol) {
                             Label("Travel", systemImage: "airplane").tag("airplane")
@@ -1254,7 +1307,8 @@ private struct AddGoalSheet: View {
                             targetAmount: targetAmount,
                             saved: min(saved, targetAmount),
                             targetDate: targetDate,
-                            symbol: symbol
+                            symbol: symbol,
+                            isMandatory: mustHappen
                         ))
                         dismiss()
                     }
@@ -1269,7 +1323,7 @@ private struct AddGoalSheet: View {
 }
 
 private struct WhatIfSheet: View {
-    let accountBalance: Int
+    let profile: FinancialProfile?
     let goals: [FinancialGoal]
 
     @State private var amountText = ""
@@ -1277,8 +1331,17 @@ private struct WhatIfSheet: View {
     @State private var repeatEvery = 1
     @State private var repeatUnit = RepeatUnit.month
 
+    @State private var explanation: String?
+    @State private var explanationError: String?
+    @State private var isExplaining = false
+    @State private var showingKeyEntry = false
+
     private var amount: Int { Int(amountText.filter(\.isNumber)) ?? 0 }
-    private var threeMonthCost: Int {
+
+    /// A recurring payment is assessed as its total cost over the next 90 days,
+    /// applied on the first date. The engine assesses one purchase, so this is an
+    /// approximation — labelled as one in the UI rather than presented as exact.
+    private var assessedAmount: Int {
         guard schedule == .recurring else { return amount }
         let occurrences: Double
         switch repeatUnit {
@@ -1289,13 +1352,65 @@ private struct WhatIfSheet: View {
         }
         return amount * max(1, Int(occurrences.rounded(.up)))
     }
-    private var projectedBalance: Int { accountBalance - threeMonthCost }
-    private var resultWeather: MoneyWeather {
-        if projectedBalance >= 1500 { return .partlySunny }
-        if projectedBalance >= 900 { return .cloudy }
-        if projectedBalance >= 300 { return .rain }
-        return .storm
+
+    private var analysis: PurchaseWhatIfAnalysis? {
+        guard let profile, assessedAmount > 0 else { return nil }
+        return try? FinancialInsights.analyzePurchaseWhatIf(
+            profile: profile,
+            amount: Double(assessedAmount),
+            purchaseDate: profile.asOfDate,
+            planningHorizon: AppFinancialData.horizon(from: profile.asOfDate),
+            calendar: AppFinancialData.calendar
+        )
     }
+
+    private var status: PurchaseStatus? { analysis?.purchaseAssessment.status }
+
+    private var resultWeather: MoneyWeather {
+        switch status {
+        case .safe: return .sunny
+        case .tight: return .rain
+        case .notSafe: return .storm
+        case nil: return .partlySunny
+        }
+    }
+
+    private var headline: String {
+        switch status {
+        case .safe: return "This fits your plan"
+        case .tight: return "Possible, but it gets tight"
+        case .notSafe: return "This crosses a protected minimum"
+        case nil: return schedule == .recurring ? "Try a recurring payment" : "Try a purchase"
+        }
+    }
+
+    private var verdict: PurchaseVerdict? {
+        guard let analysis else { return nil }
+        let explanation = analysis.purchaseExplanation
+        return PurchaseVerdict(
+            amount: Double(assessedAmount),
+            status: explanation.status,
+            reason: explanation.reason,
+            projectedCashBefore: explanation.projectedCashBeforePurchase,
+            projectedCashAfter: explanation.projectedCashAfterPurchase,
+            hardFloor: explanation.hardFloor,
+            recommendedFloor: explanation.recommendedFloor,
+            shortfallToHardFloor: explanation.shortfallToHardFloor,
+            shortfallToRecommendedFloor: explanation.shortfallToRecommendedFloor,
+            limitingDate: explanation.limitingDate,
+            recommendedDate: explanation.recommendedDate,
+            worsenedGoals: analysis.worsenedGoals.map {
+                PurchaseVerdict.GoalChange(
+                    name: $0.goal.name,
+                    before: $0.before.status.rawValue,
+                    after: $0.after.status.rawValue
+                )
+            }
+        )
+    }
+
+    private static let money = FloatingPointFormatStyle<Double>.Currency(code: "USD")
+        .precision(.fractionLength(0))
 
     var body: some View {
         ZStack {
@@ -1304,7 +1419,7 @@ private struct WhatIfSheet: View {
 
             ScrollView {
                 VStack(spacing: 18) {
-                    SheetTitle(eyebrow: "WHAT IF?", title: schedule == .recurring ? "Try a recurring payment" : "Try a purchase", symbol: resultWeather.symbol)
+                    SheetTitle(eyebrow: "WHAT IF?", title: headline, symbol: resultWeather.symbol)
 
                     EntryCard(title: "PURCHASE AMOUNT") {
                         CurrencyField(text: $amountText, placeholder: "80")
@@ -1334,32 +1449,72 @@ private struct WhatIfSheet: View {
                         }
                     }
 
-                    if amount > 0 {
+                    if amount > 0, let analysis {
+                        let detail = analysis.purchaseExplanation
+
                         VStack(spacing: 0) {
-                            ScenarioMetric(title: "Balance now", value: "$\(accountBalance.formatted())")
+                            ScenarioMetric(
+                                title: "Cash on your tightest day",
+                                value: Self.money.format(detail.projectedCashBeforePurchase)
+                            )
                             Divider().overlay(.white.opacity(0.12))
-                            ScenarioMetric(title: schedule == .recurring ? "Balance after 90 days" : "Balance after purchase", value: "$\(projectedBalance.formatted())")
+                            ScenarioMetric(
+                                title: "Same day, after this",
+                                value: Self.money.format(detail.projectedCashAfterPurchase)
+                            )
+                            Divider().overlay(.white.opacity(0.12))
+                            ScenarioMetric(
+                                title: "Your protected minimum",
+                                value: Self.money.format(detail.hardFloor)
+                            )
                             if schedule == .recurring {
                                 Divider().overlay(.white.opacity(0.12))
-                                ScenarioMetric(title: "Estimated 90-day cost", value: "−$\(threeMonthCost.formatted())")
+                                ScenarioMetric(
+                                    title: "Estimated 90-day cost",
+                                    value: "−" + Self.money.format(Double(assessedAmount))
+                                )
+                            }
+                            if let recommendedDate = detail.recommendedDate, detail.status != .safe {
+                                Divider().overlay(.white.opacity(0.12))
+                                ScenarioMetric(
+                                    title: "Safe from",
+                                    value: recommendedDate.formatted(.dateTime.month(.abbreviated).day())
+                                )
                             }
                         }
                         .padding(.horizontal, 16)
                         .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
 
-                        VStack(alignment: .leading, spacing: 14) {
-                            Text("GOAL IMPACT")
-                                .font(.helvetica(.caption, weight: .bold))
-                                .tracking(1.1)
-                                .foregroundStyle(.white.opacity(0.6))
-                            ForEach(goals) { goal in
-                                WhatIfGoalRow(goal: goal, purchaseImpact: threeMonthCost)
+                        explanationCard
+
+                        if !goals.isEmpty {
+                            VStack(alignment: .leading, spacing: 14) {
+                                Text("GOAL IMPACT")
+                                    .font(.helvetica(.caption, weight: .bold))
+                                    .tracking(1.1)
+                                    .foregroundStyle(.white.opacity(0.6))
+
+                                ForEach(goals) { goal in
+                                    let impact = analysis.goalImpacts.first { $0.goal.id == goal.id }
+                                    WhatIfGoalRow(
+                                        goal: goal,
+                                        beforeStatus: impact?.before.status,
+                                        afterStatus: impact?.after.status,
+                                        worsened: impact?.worsened ?? false
+                                    )
+                                }
                             }
+                            .padding(16)
+                            .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                         }
-                        .padding(16)
-                        .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    } else if amount > 0 {
+                        Text("Connect an account first — there is no cash path to test this against yet.")
+                            .font(.helvetica(.subheadline))
+                            .foregroundStyle(.white.opacity(0.62))
+                            .multilineTextAlignment(.center)
+                            .padding(24)
                     } else {
-                        Text("Enter an amount to see the effect on your balance and goals. Nothing here changes your real forecast.")
+                        Text("Enter an amount to see the effect on your cash path and goals. Nothing here changes your real forecast.")
                             .font(.helvetica(.subheadline))
                             .foregroundStyle(.white.opacity(0.62))
                             .multilineTextAlignment(.center)
@@ -1374,14 +1529,153 @@ private struct WhatIfSheet: View {
         .preferredColorScheme(.dark)
         .animation(.easeInOut(duration: 0.3), value: schedule)
         .animation(.easeInOut(duration: 0.3), value: resultWeather)
+        .onChange(of: assessedAmount) { _, _ in
+            explanation = nil
+            explanationError = nil
+        }
+        .sheet(isPresented: $showingKeyEntry) {
+            GeminiKeySheet()
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
+        }
+    }
+
+    /// The engine has already decided. Gemini only puts that decision into words,
+    /// so if it is unavailable the numbers above still stand on their own.
+    @ViewBuilder private var explanationCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("WHAT THIS MEANS")
+                    .font(.helvetica(.caption, weight: .bold))
+                    .tracking(1.1)
+                    .foregroundStyle(.white.opacity(0.6))
+                Spacer()
+                if isExplaining { ProgressView().tint(.white) }
+            }
+
+            if let explanation {
+                Text(explanation)
+                    .font(.helvetica(.subheadline))
+                    .foregroundStyle(.white.opacity(0.88))
+            } else if let explanationError {
+                Text(explanationError)
+                    .font(.helvetica(.caption))
+                    .foregroundStyle(.white.opacity(0.7))
+            } else if !isExplaining {
+                Text("Ask Gemini to put this in plain language. The verdict above does not change — it only gets explained.")
+                    .font(.helvetica(.caption))
+                    .foregroundStyle(.white.opacity(0.55))
+            }
+
+            HStack(spacing: 12) {
+                Button(GeminiSettings.apiKey == nil ? "Add Gemini key" : "Explain this") {
+                    if GeminiSettings.apiKey == nil {
+                        showingKeyEntry = true
+                    } else {
+                        requestExplanation()
+                    }
+                }
+                .font(.helvetica(.subheadline, weight: .semibold))
+                .foregroundStyle(Color.sunGold)
+                .disabled(isExplaining)
+
+                if GeminiSettings.apiKey != nil {
+                    Button("Change key") { showingKeyEntry = true }
+                        .font(.helvetica(.caption))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private func requestExplanation() {
+        guard let verdict else { return }
+        isExplaining = true
+        explanationError = nil
+        Task {
+            do {
+                explanation = try await GeminiExplainer.explain(verdict)
+            } catch {
+                explanationError = (error as? LocalizedError)?.errorDescription
+                    ?? "Could not reach Gemini."
+            }
+            isExplaining = false
+        }
+    }
+}
+
+private struct GeminiKeySheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var key = GeminiSettings.apiKey ?? ""
+
+    var body: some View {
+        ZStack {
+            LinearGradient(colors: MoneyWeather.cloudy.backgroundColors, startPoint: .topLeading, endPoint: .bottomTrailing)
+                .ignoresSafeArea()
+
+            ScrollView {
+                VStack(spacing: 18) {
+                    SheetTitle(eyebrow: "GEMINI", title: "Explain results in plain language", symbol: "sparkles")
+
+                    EntryCard(title: "API KEY") {
+                        SecureField("Paste your Gemini API key", text: $key)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    }
+
+                    Text("The key stays on this device and is never committed to the repository. It is used only to reword decisions the engine has already made.")
+                        .font(.helvetica(.caption))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .multilineTextAlignment(.center)
+
+                    PrimarySheetButton(title: "Save key", enabled: !key.trimmingCharacters(in: .whitespaces).isEmpty) {
+                        GeminiSettings.apiKey = key
+                        dismiss()
+                    }
+
+                    if GeminiSettings.apiKey != nil {
+                        Button("Remove key") {
+                            GeminiSettings.apiKey = nil
+                            key = ""
+                            dismiss()
+                        }
+                        .font(.helvetica(.caption))
+                        .foregroundStyle(.white.opacity(0.55))
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 28)
+            }
+            .scrollIndicators(.hidden)
+        }
+        .preferredColorScheme(.dark)
     }
 }
 
 private struct WhatIfGoalRow: View {
     let goal: FinancialGoal
-    let purchaseImpact: Int
+    let beforeStatus: FinancialHealthStatus?
+    let afterStatus: FinancialHealthStatus?
+    let worsened: Bool
 
-    private var delayDays: Int { max(1, Int(ceil(Double(purchaseImpact) / 18.0))) }
+    private func label(_ status: FinancialHealthStatus) -> String {
+        switch status {
+        case .safe: return "on track"
+        case .tight: return "tight"
+        case .notSafe: return "at risk"
+        }
+    }
+
+    private var detail: String {
+        guard let afterStatus else { return "Not affected by this purchase" }
+        guard worsened, let beforeStatus else {
+            return "Stays " + label(afterStatus)
+        }
+        return "Moves from " + label(beforeStatus) + " to " + label(afterStatus)
+    }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -1390,14 +1684,14 @@ private struct WhatIfGoalRow: View {
                 .background(.white.opacity(0.1), in: Circle())
             VStack(alignment: .leading, spacing: 2) {
                 Text(goal.name).font(.helvetica(.subheadline, weight: .semibold))
-                Text("Could delay this goal by about \(delayDays) days")
+                Text(detail)
                     .font(.helvetica(.caption))
                     .foregroundStyle(.white.opacity(0.54))
             }
             Spacer()
-            Text("−$\(min(purchaseImpact, goal.remaining).formatted())")
+            Image(systemName: worsened ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                 .font(.helvetica(.caption, weight: .bold))
-                .foregroundStyle(Color.sunGold)
+                .foregroundStyle(worsened ? Color.sunGold : .white.opacity(0.4))
         }
     }
 }
@@ -2058,6 +2352,27 @@ private struct FinancialGoal: Identifiable, Codable, Equatable {
     let saved: Int
     let targetDate: Date
     let symbol: String
+    /// Optional so plans saved before this field existed still decode.
+    let isMandatory: Bool?
+
+    /// Must-happen goals are subtracted from the projected cash path, so they
+    /// reduce safe-to-spend straight away. Nice-to-have goals stay out of the
+    /// baseline and surface as trade-offs instead.
+    var mustHappen: Bool { isMandatory ?? false }
+
+    /// Used to show savings that accrued from underspending on top of whatever
+    /// the user had already set aside.
+    func withSaved(_ newSaved: Int) -> FinancialGoal {
+        FinancialGoal(
+            id: id,
+            name: name,
+            targetAmount: targetAmount,
+            saved: newSaved,
+            targetDate: targetDate,
+            symbol: symbol,
+            isMandatory: isMandatory
+        )
+    }
 
     var progress: Double {
         guard targetAmount > 0 else { return 0 }
