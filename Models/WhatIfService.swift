@@ -1,6 +1,6 @@
 import Foundation
 
-protocol WhatIfParsing {
+protocol WhatIfParsing: Sendable {
     func parseScenario(from text: String) async throws -> WhatIfScenario
 }
 
