@@ -87,4 +87,68 @@ final class PurchaseExplanationTests: XCTestCase {
         XCTAssertEqual(result.explanation.projectedCashAfterPurchase, 950, accuracy: 0.001)
         XCTAssertEqual(result.explanation.shortfallToHardFloor, 50, accuracy: 0.001)
     }
+
+    func testNotSafePurchaseExplainsProtectedGoalEvenOutsidePlanningHorizon() throws {
+        let asOf = date(2026, 9, 12)
+        let profile = FinancialProfile(
+            currentCash: 2350,
+            asOfDate: asOf,
+            goals: [
+                Goal(
+                    name: "Miami",
+                    targetAmount: 1000,
+                    deadline: date(2026, 12, 26),
+                    priority: .mandatory,
+                    flexibility: .low
+                )
+            ],
+            spendingPolicy: SpendingPolicy(bufferWeeks: 0, manualMinimumBuffer: 0)
+        )
+
+        let result = try FinancialInsights.assessAndExplainPurchase(
+            profile: profile,
+            amount: 1500,
+            purchaseDate: asOf,
+            planningHorizon: date(2026, 11, 30),
+            calendar: calendar
+        )
+
+        XCTAssertEqual(result.assessment.status, .notSafe)
+        XCTAssertEqual(result.explanation.reason, .violatesProtectedGoal)
+        XCTAssertEqual(result.explanation.hardFloor, 1000, accuracy: 0.001)
+        XCTAssertEqual(result.explanation.projectedCashAfterPurchase, 850, accuracy: 0.001)
+        XCTAssertEqual(result.explanation.shortfallToHardFloor, 150, accuracy: 0.001)
+    }
+
+    func testProtectedGoalAndPersonalReserveExplainMultipleHardConstraints() throws {
+        let asOf = date(2026, 9, 12)
+        let profile = FinancialProfile(
+            currentCash: 2350,
+            asOfDate: asOf,
+            personalReserveSteps: [
+                PersonalReserveStep(effectiveDate: asOf, minimumCash: 500)
+            ],
+            goals: [
+                Goal(
+                    name: "Miami",
+                    targetAmount: 1000,
+                    deadline: date(2026, 12, 26),
+                    priority: .mandatory,
+                    flexibility: .low
+                )
+            ],
+            spendingPolicy: SpendingPolicy(bufferWeeks: 0, manualMinimumBuffer: 0)
+        )
+
+        let result = try FinancialInsights.assessAndExplainPurchase(
+            profile: profile,
+            amount: 2000,
+            purchaseDate: asOf,
+            planningHorizon: date(2026, 11, 30),
+            calendar: calendar
+        )
+
+        XCTAssertEqual(result.assessment.status, .notSafe)
+        XCTAssertEqual(result.explanation.reason, .violatesMultipleHardConstraints)
+    }
 }
