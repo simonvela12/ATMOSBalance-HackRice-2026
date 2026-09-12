@@ -1,0 +1,11 @@
+scenario,current_cash,protected_cash,safety_buffer,expected_income,committed_expenses,mandatory_goal_reserve,purchase_amount,expected_projected_balance,expected_safe_to_spend,expected_affordable,expected_remaining_after_purchase
+baseline,8000,7000,250,1000,500,0,450,8500,1250,true,800
+no_future_income,1200,500,200,0,300,0,250,900,200,false,-50
+large_protected_balance,3000,2900,100,500,250,0,100,3250,250,true,150
+mandatory_goal_not_protected,5000,2500,300,1000,700,1200,500,5300,1300,true,800
+mandatory_goal_makes_purchase_unsafe,5000,2500,300,500,700,1700,500,4800,300,false,-200
+negative_discretionary_cash,2000,1800,300,200,400,0,50,1800,-300,false,-350
+one_time_past_not_reprojected,4000,2500,250,0,500,0,500,3500,750,true,250
+irregular_expected_value,3000,1800,200,600,400,0,700,3200,1200,true,500
+purchase_exactly_at_limit,2500,1500,250,500,250,0,1000,2750,1000,true,0
+purchase_one_dollar_over_limit,2500,1500,250,500,250,0,1001,2750,1000,false,-1
