@@ -1,7 +1,7 @@
 import Foundation
 
-struct WhatIfScenario: Codable, Equatable {
-    enum ScenarioType: String, Codable {
+struct WhatIfScenario: Codable, Equatable, Sendable {
+    enum ScenarioType: String, Codable, Sendable {
         case purchase
     }
 
@@ -11,8 +11,8 @@ struct WhatIfScenario: Codable, Equatable {
     let intendedDate: Date?
 }
 
-struct WhatIfResult: Equatable {
-    enum Status: String {
+struct WhatIfResult: Equatable, Sendable {
+    enum Status: String, Sendable {
         case safe = "SAFE"
         case wait = "WAIT"
     }
