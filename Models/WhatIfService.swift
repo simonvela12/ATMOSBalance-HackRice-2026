@@ -6,10 +6,29 @@ protocol WhatIfParsing: Sendable {
 
 enum WhatIfParserFactory {
     static func makeDefault() -> any WhatIfParsing {
+        let local = LocalWhatIfParser()
         if let key = ProcessInfo.processInfo.environment["GEMINI_API_KEY"], !key.isEmpty {
-            return GeminiWhatIfParser(apiKey: key)
+            return FallbackWhatIfParser(
+                primary: GeminiWhatIfParser(apiKey: key),
+                fallback: local
+            )
         }
-        return LocalWhatIfParser()
+        return local
+    }
+}
+
+/// Tries the online parser first and silently falls back to the local parser.
+/// This keeps the hackathon demo usable even if Wi-Fi or the API is unavailable.
+struct FallbackWhatIfParser: WhatIfParsing {
+    let primary: any WhatIfParsing
+    let fallback: any WhatIfParsing
+
+    func parseScenario(from text: String) async throws -> WhatIfScenario {
+        do {
+            return try await primary.parseScenario(from: text)
+        } catch {
+            return try await fallback.parseScenario(from: text)
+        }
     }
 }
 
