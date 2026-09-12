@@ -65,6 +65,12 @@ public struct IncomeEvent: Codable, Identifiable, Sendable {
     public let source: String
     public let type: IncomeType
     public let confidence: Double
+    public let amountRange: AmountRange?
+    public let dateWindow: DateWindow?
+    public let recurrenceRule: RecurrenceRule?
+    public let allocations: [IncomeAllocation]?
+    public let planningSource: PlanningEventSource?
+    public let planningStatus: PlanningEventStatus?
 
     public init(
         id: UUID = UUID(),
@@ -72,7 +78,13 @@ public struct IncomeEvent: Codable, Identifiable, Sendable {
         date: Date,
         source: String,
         type: IncomeType,
-        confidence: Double = 1.0
+        confidence: Double = 1.0,
+        amountRange: AmountRange? = nil,
+        dateWindow: DateWindow? = nil,
+        recurrenceRule: RecurrenceRule? = nil,
+        allocations: [IncomeAllocation]? = nil,
+        planningSource: PlanningEventSource? = nil,
+        planningStatus: PlanningEventStatus? = nil
     ) {
         self.id = id
         self.amount = amount
@@ -80,6 +92,12 @@ public struct IncomeEvent: Codable, Identifiable, Sendable {
         self.source = source
         self.type = type
         self.confidence = confidence
+        self.amountRange = amountRange
+        self.dateWindow = dateWindow
+        self.recurrenceRule = recurrenceRule
+        self.allocations = allocations
+        self.planningSource = planningSource
+        self.planningStatus = planningStatus
     }
 
     public var adjustedAmount: Double {
@@ -101,6 +119,12 @@ public struct ExpenseEvent: Codable, Identifiable, Sendable {
     public let committed: Bool
     public let reimbursable: Bool
     public let extraordinary: Bool
+    public let amountRange: AmountRange?
+    public let dateWindow: DateWindow?
+    public let recurrenceRule: RecurrenceRule?
+    public let merchantIdentity: String?
+    public let planningSource: PlanningEventSource?
+    public let planningStatus: PlanningEventStatus?
 
     public init(
         id: UUID = UUID(),
@@ -110,7 +134,13 @@ public struct ExpenseEvent: Codable, Identifiable, Sendable {
         essential: Bool = true,
         committed: Bool = true,
         reimbursable: Bool = false,
-        extraordinary: Bool = false
+        extraordinary: Bool = false,
+        amountRange: AmountRange? = nil,
+        dateWindow: DateWindow? = nil,
+        recurrenceRule: RecurrenceRule? = nil,
+        merchantIdentity: String? = nil,
+        planningSource: PlanningEventSource? = nil,
+        planningStatus: PlanningEventStatus? = nil
     ) {
         self.id = id
         self.amount = amount
@@ -120,6 +150,12 @@ public struct ExpenseEvent: Codable, Identifiable, Sendable {
         self.committed = committed
         self.reimbursable = reimbursable
         self.extraordinary = extraordinary
+        self.amountRange = amountRange
+        self.dateWindow = dateWindow
+        self.recurrenceRule = recurrenceRule
+        self.merchantIdentity = merchantIdentity
+        self.planningSource = planningSource
+        self.planningStatus = planningStatus
     }
 }
 
