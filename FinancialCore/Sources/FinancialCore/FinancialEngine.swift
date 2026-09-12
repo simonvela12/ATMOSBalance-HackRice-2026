@@ -62,11 +62,44 @@ public enum FinancialEngine {
             .reduce(0) { $0 + max(0, $1.minimumBalance) }
     }
 
+    /// Cash that belongs to active must-happen goals and therefore is not available
+    /// for discretionary spending yet. A goal stays protected until its deadline;
+    /// on the deadline it becomes a mandatory payment instead, avoiding double count.
+    public static func protectedMandatoryGoals(profile: FinancialProfile, on date: Date) -> Double {
+        profile.goals
+            .filter {
+                $0.lifecycleState == .active &&
+                $0.priority == .mandatory &&
+                $0.remainingAmount > 0 &&
+                $0.deadline > date
+            }
+            .reduce(0) { $0 + $1.remainingAmount }
+    }
+
+    /// The amount that must remain untouched on a date. Personal/institutional
+    /// minimums share the same base floor, while future must-happen goals are
+    /// additional commitments with their own deadlines.
     public static func hardFloor(profile: FinancialProfile, on date: Date) -> Double {
-        max(
+        let baseFloor = max(
             personalReserve(profile: profile, on: date),
             institutionalMinimum(profile: profile, on: date)
         )
+        return baseFloor + protectedMandatoryGoals(profile: profile, on: date)
+    }
+
+    /// Everything in today's account balance that is unavailable for discretionary
+    /// spending: the current hard floor plus mandatory goals already due today.
+    public static func protectedCashToday(profile: FinancialProfile) -> Double {
+        hardFloor(profile: profile, on: profile.asOfDate)
+            + mandatoryGoalPayments(profile: profile, targetDate: profile.asOfDate)
+    }
+
+    /// Money from the current account balance that is liquid today after every hard
+    /// protection is honored. This deliberately excludes the optional safety buffer:
+    /// the remainder is the user's actual spendable balance; the buffer can still
+    /// downgrade a purchase from safe to tight.
+    public static func liquidCashToday(profile: FinancialProfile) -> Double {
+        max(0, profile.currentCash - protectedCashToday(profile: profile))
     }
 
     public static func expectedIncome(profile: FinancialProfile, targetDate: Date) -> Double {
@@ -87,10 +120,12 @@ public enum FinancialEngine {
 
     /// Remaining mandatory goals are future obligations even when their deadline has
     /// already passed. An overdue unpaid goal is therefore treated as immediately due
-    /// rather than disappearing from the forecast.
+    /// rather than disappearing from the forecast. Paused/completed goals do not move
+    /// cash until they become active again.
     public static func mandatoryGoalPayments(profile: FinancialProfile, targetDate: Date) -> Double {
         profile.goals
             .filter {
+                $0.lifecycleState == .active &&
                 $0.priority == .mandatory &&
                 $0.remainingAmount > 0 &&
                 $0.deadline <= targetDate
@@ -138,7 +173,7 @@ public enum FinancialEngine {
 
         let personal = personalReserve(profile: profile, on: targetDate)
         let institutional = institutionalMinimum(profile: profile, on: targetDate)
-        let floor = max(personal, institutional)
+        let floor = hardFloor(profile: profile, on: targetDate)
         let buffer = safetyBuffer(profile: profile, calendar: calendar)
         let hardHeadroom = cash - floor
         let recommendedHeadroom = hardHeadroom - buffer
