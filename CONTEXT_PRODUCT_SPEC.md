@@ -56,6 +56,9 @@ The product must work well for college students and other users with sparse, irr
 - Earmarked income still enters the dated cash path on the expected date, but earmarked portions should not automatically become general Safe to Spend.
 - Earmarked funds should be associated with the relevant obligation or goal so the product can distinguish **cash on hand** from **cash actually free to spend**.
 - Split allocations must remain visible and editable so the user can understand exactly where an incoming deposit is intended to go.
+- If an earmark later becomes unnecessary because the linked obligation/goal was paid another way, removed, or fully satisfied, the app must **not automatically release those funds to general cash**.
+- Instead, the app should prompt the user to choose what happens next: **Move to General cash / Reassign to another purpose / Keep reserved**.
+- Until the user confirms a new destination, those funds remain reserved and do not automatically inflate discretionary Safe to Spend.
 
 Examples the model must support:
 
@@ -64,6 +67,7 @@ Examples the model must support:
 - `$0 expected income for the next 3 months`.
 - `$3,000 family transfer on Dec 1`, one time.
 - `$3,000 family transfer on Dec 1`, split as `$2,000 Tuition + $1,000 General support`.
+- A Tuition earmark whose linked tuition obligation is later removed; the app asks whether to make the money general cash, reassign it, or keep it reserved.
 - An irregular tutoring payment on one specific date without any implied next payment.
 
 ### Expenses
@@ -139,6 +143,7 @@ Examples:
 - Optional split purpose allocation
 - Example: $3,000 from family on Dec 1, with $2,000 for Tuition and $1,000 for General support
 - The confirmation preview should make clear which portions are reserved and which portion is discretionary
+- If a reserved purpose later disappears, show a follow-up prompt: **Move to General cash / Reassign / Keep reserved**
 
 **Someone owes me**
 - Original transaction anchor
@@ -218,6 +223,7 @@ Confidence behavior:
 - Dated one-time income should affect the cash path only on and after its actual expected date.
 - An earmarked deposit can increase bank cash without increasing discretionary Safe to Spend by the same amount.
 - When one deposit is split across purposes, only the unallocated/general portion should be treated as freely discretionary cash unless a linked obligation or goal is later released.
+- Earmarked funds are never silently released; when their purpose disappears, the user must explicitly choose whether to make them general, reassign them, or keep them reserved.
 
 ## Confirmed decisions
 
@@ -230,6 +236,7 @@ Confidence behavior:
 7. The entire income model is **event-based rather than salary-based**. The product must support long periods of zero income, one-time family transfers, isolated refunds, stipends, freelance payments, and other sparse/lumpy cash inflows without inventing recurrence.
 8. Future income can optionally be assigned a **purpose / earmark** such as General support, Tuition, Rent, Travel, or Other. Earmarked funds enter the dated cash balance but should not automatically inflate discretionary Safe to Spend; they remain associated with their intended obligation or goal.
 9. A single income event may be **split across multiple purposes**. Example: a $3,000 deposit can allocate $2,000 to Tuition and $1,000 to General support. Any unallocated remainder stays general cash, and the UI must make each allocation explicit before confirmation.
+10. If an earmarked purpose later disappears or is already fully satisfied, the earmarked money is **not automatically released**. The app asks the user to choose **Move to General cash / Reassign to another purpose / Keep reserved**. Until confirmed, the funds remain reserved.
 
 ## Open decisions
 
