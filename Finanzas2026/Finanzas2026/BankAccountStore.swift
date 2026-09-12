@@ -83,7 +83,12 @@ final class BankAccountStore: ObservableObject {
                 return
             }
 
-            try NessieCredentialStore.save(.init(apiKey: apiKey, customerID: customerID))
+            // Ad-hoc unsigned Simulator builds (including Appetize artifacts) can
+            // reject Keychain access with errSecMissingEntitlement. Persistence is
+            // an enhancement, not part of the network sync transaction: keeping it
+            // best-effort ensures manual and automatic refresh remain active for
+            // the current session. Signed iPhone builds still restore securely.
+            try? NessieCredentialStore.save(.init(apiKey: apiKey, customerID: customerID))
             phase = .connected
             startAutomaticRefreshIfNeeded()
         } catch {

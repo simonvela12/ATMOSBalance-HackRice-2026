@@ -114,6 +114,8 @@ private struct NessieConnectionSheet: View {
 
                 if bankStore.canRefresh {
                     Section {
+                        Label("Live refresh active — every 10 seconds", systemImage: "arrow.triangle.2.circlepath.circle.fill")
+                            .foregroundStyle(.green)
                         Button("Refresh linked accounts") {
                             Task { await bankStore.refreshLinkedAccounts() }
                         }
