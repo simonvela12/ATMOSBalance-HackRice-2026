@@ -155,24 +155,32 @@ public enum QualitativeProfileUpdater {
         }
 
         if context.subject == .expense,
-           let recurring = try? QualitativeDirectiveMaterializer.recurringExpenseEvents(
+           let label {
+            let template = matchingExpenseTemplate(
+                in: updated.expenseEvents,
+                label: label,
+                referenceDate: context.referenceDate
+            )
+            if let recurring = try? QualitativeDirectiveMaterializer.recurringExpenseEvents(
                 from: result,
                 context: context,
                 asOfDate: updated.asOfDate,
                 through: horizon,
+                essential: template?.essential ?? true,
+                committed: template?.committed ?? true,
                 calendar: calendar
-           ),
-           !recurring.isEmpty,
-           let label {
-            let existing = updated.expenseEvents.filter {
-                $0.category == label && $0.date > updated.asOfDate
-            }
-            if !sameExpenseSchedule(existing, recurring) {
-                updated.expenseEvents.removeAll {
+            ),
+               !recurring.isEmpty {
+                let existing = updated.expenseEvents.filter {
                     $0.category == label && $0.date > updated.asOfDate
                 }
-                updated.expenseEvents.append(contentsOf: recurring)
-                didChange = true
+                if !sameExpenseSchedule(existing, recurring) {
+                    updated.expenseEvents.removeAll {
+                        $0.category == label && $0.date > updated.asOfDate
+                    }
+                    updated.expenseEvents.append(contentsOf: recurring)
+                    didChange = true
+                }
             }
         }
 
@@ -222,6 +230,19 @@ public enum QualitativeProfileUpdater {
             reimbursable: event.reimbursable,
             extraordinary: event.extraordinary
         )
+    }
+
+    private static func matchingExpenseTemplate(
+        in events: [ExpenseEvent],
+        label: String,
+        referenceDate: Date?
+    ) -> ExpenseEvent? {
+        let matches = events.filter { $0.category == label }
+        guard let referenceDate else { return matches.first }
+
+        return matches.min { lhs, rhs in
+            abs(lhs.date.timeIntervalSince(referenceDate)) < abs(rhs.date.timeIntervalSince(referenceDate))
+        }
     }
 
     private static func sameIncomeSchedule(_ lhs: [IncomeEvent], _ rhs: [IncomeEvent]) -> Bool {
