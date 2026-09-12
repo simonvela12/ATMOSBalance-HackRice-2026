@@ -60,16 +60,16 @@ private struct NessieConnectionSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    SecureField("Bank sandbox API key", text: $apiKey)
+                    SecureField("Bank access key", text: $apiKey)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                    TextField("Customer ID", text: $customerID)
+                    TextField("Test customer", text: $customerID)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                 } header: {
-                    Text("Connect test bank")
+                    Text("Connect your bank")
                 } footer: {
-                    Text("These credentials stay on this device for the current session.")
+                    Text("For the hackathon demo, use the test-bank credentials provided for this account. They stay on this device for the current session.")
                 }
 
                 Section("Status") {
