@@ -1,0 +1,153 @@
+# Context Product Specification
+
+Working branch: `product-v1.2-context-design`
+
+This document captures product decisions for the next Context iteration without interfering with Simon's active work on `product-v1.2`.
+
+## Product idea
+
+Context exists to capture financially relevant information that the bank cannot know by itself.
+
+The user should have two clear entry modes:
+
+1. **Explain a transaction** — attach meaning to an existing linked-bank transaction.
+2. **Add something I expect** — create a future financial event that has not appeared in the bank yet.
+
+Nothing that changes the plan should be applied silently. The app should interpret supported context, show the result back to the user, request missing information instead of guessing, and require confirmation.
+
+## Supported concepts already agreed
+
+### Income
+
+- One-time income.
+- Recurring income.
+- Irregular / uncertain income.
+- Weekly, biweekly, and monthly recurrence.
+- Expected future income with amount, date, and confidence.
+- Confidence shortcuts: Confirmed, Likely, Possible.
+- Custom confidence should also be supported.
+- For irregular income, expected-value planning may use `amount × confidence` while scenario views can remain conservative / expected / optimistic.
+
+### Expenses
+
+- Mandatory / must-pay expenses.
+- Cancelable or avoidable expenses.
+- Essential vs non-essential context.
+- Recurring expenses.
+- Future expenses not yet visible in bank data.
+- Reimbursements / shared expenses.
+- Partial reimbursement must be supported; reimbursement amount does not have to equal the original expense.
+- Temporary liquidity dips must remain visible even when a later reimbursement offsets the expense.
+
+### Goals
+
+- Goal amount and target date.
+- Mandatory goals.
+- Flexible / postponable goals.
+
+### Personal reserve
+
+- Minimum cash the user does not want to touch.
+- The underlying engine supports reserve changes over time, so future UX may allow dated reserve changes.
+
+## Proposed Context quick actions
+
+The UI should make common meanings easy to express without requiring perfect natural-language phrasing.
+
+Suggested quick actions:
+
+- One time
+- Recurring
+- Expected income
+- Uncertain
+- Someone owes me
+- Must pay
+- Can cancel
+- Goal
+- Keep a reserve
+
+Quick actions should open only the fields needed for that concept.
+
+Examples:
+
+**Expected income**
+- Amount
+- Date
+- Confidence: Confirmed / Likely / Possible / Custom
+
+**Someone owes me**
+- Original transaction anchor
+- Amount expected back
+- Repayment date
+
+**Future expense**
+- Amount
+- Date
+- Must pay? Yes / No
+- Can reduce or cancel? No / Maybe / Yes
+- Recurrence: No / Weekly / Every 2 weeks / Monthly
+
+## Human-first expense questions
+
+Do not initially expose every internal categorical field as technical metadata. Prefer questions such as:
+
+- Do you have to pay this? Yes / No
+- Could you reduce or cancel it? No / Maybe / Yes
+- Will it happen again? No / Weekly / Every 2 weeks / Monthly
+
+Merchant/category classification can be suggested automatically and corrected by the user.
+
+## Existing categorical model to preserve
+
+Expense categories:
+- housing
+- food
+- transportation
+- education
+- entertainment
+- shopping
+- travel
+- health
+- subscriptions
+- utilities
+- social
+- personal care
+- fees
+- other
+
+Expense qualitative dimensions:
+- Need: essential / important / optional
+- Flexibility: fixed / semi-flexible / flexible
+- Planning: planned / unplanned / emergency
+- Frequency: recurring / occasional / one-time
+- Priority: high / medium / low
+
+Income source kinds:
+- job
+- campus work
+- family
+- freelance
+- tutoring
+- refund
+- other
+
+Confidence shortcuts currently map conceptually to:
+- confirmed = 100%
+- likely = 70%
+- possible = 30%
+
+Custom confidence is a desired addition.
+
+## Product principles
+
+- Context should change the same `FinancialProfile` used by Home, Calendar, Plans, and What-If.
+- Bank data and user context must remain distinguishable.
+- Never present demo/sample values as real linked-bank data.
+- Never silently infer recurrence from transaction history alone.
+- Never silently guess missing amount, date, cadence, or reimbursement amount.
+- Preserve deterministic and explainable planning behavior.
+- Do not introduce opaque financial scores or probability claims beyond explicit user-provided confidence.
+
+## Open decisions
+
+The remaining UX and semantic choices will be decided interactively and recorded here before implementation.
