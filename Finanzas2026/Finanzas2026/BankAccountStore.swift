@@ -44,6 +44,14 @@ final class BankAccountStore: ObservableObject {
 
     var isLinked: Bool { !accounts.isEmpty }
 
+    /// A refresh only works while this session still holds the credentials that
+    /// created the sync service — cached data alone cannot be refreshed.
+    var canRefresh: Bool { !syncServices.isEmpty }
+
+    /// True when the last sync completed but at least one account could not be
+    /// read in full, so its history is incomplete.
+    var hasPartialSync: Bool { lastSyncResult?.isPartial == true }
+
     var totalAvailableCash: Double {
         Double(
             accounts

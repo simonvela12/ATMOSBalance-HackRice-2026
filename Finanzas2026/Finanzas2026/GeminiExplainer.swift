@@ -111,6 +111,8 @@ enum GeminiError: LocalizedError {
     case rateLimited
     case server(Int)
     case emptyResponse
+    case truncated
+    case rejectedRequest
     case network(String)
 
     var errorDescription: String? {
@@ -120,6 +122,8 @@ enum GeminiError: LocalizedError {
         case .rateLimited: return "Gemini is rate limiting right now. Wait a moment and try again."
         case .server(let code): return "Gemini returned an error (\(code))."
         case .emptyResponse: return "Gemini returned no explanation."
+        case .truncated: return "Gemini ran out of room before finishing. The figures above are unaffected."
+        case .rejectedRequest: return "Gemini rejected the request."
         case .network(let message): return message
         }
     }
@@ -154,13 +158,41 @@ enum GeminiExplainer {
         components?.queryItems = [URLQueryItem(name: "key", value: apiKey)]
         guard let url = components?.url else { throw GeminiError.network("Could not build the Gemini URL.") }
 
+        // Current flash models reason before answering, and those thought tokens are
+        // billed against maxOutputTokens. A tight cap gets spent on reasoning and the
+        // visible answer is cut mid-sentence, so the budget is generous and thinking
+        // is turned down.
+        //
+        // `thinkingConfig` is not accepted by every model generation. If the API
+        // rejects the request because of it, the call is retried once without it
+        // rather than leaving the user with no explanation at all.
+        do {
+            return try await send(prompt: prompt, url: url, disableThinking: true)
+        } catch GeminiError.rejectedRequest {
+            return try await send(prompt: prompt, url: url, disableThinking: false)
+        }
+    }
+
+    private static func send(
+        prompt: String,
+        url: URL,
+        disableThinking: Bool
+    ) async throws -> String {
+        var generationConfig: [String: Any] = [
+            "temperature": 0.2,
+            "maxOutputTokens": 2048
+        ]
+        if disableThinking {
+            generationConfig["thinkingConfig"] = ["thinkingBudget": 0]
+        }
+
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.timeoutInterval = 20
+        request.timeoutInterval = 30
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: [
             "contents": [["parts": [["text": prompt]]]],
-            "generationConfig": ["temperature": 0.2, "maxOutputTokens": 240]
+            "generationConfig": generationConfig
         ])
 
         let data: Data
@@ -177,22 +209,27 @@ enum GeminiExplainer {
 
         switch http.statusCode {
         case 200..<300: break
-        case 400, 401, 403: throw GeminiError.invalidKey
+        case 400: throw GeminiError.rejectedRequest
+        case 401, 403: throw GeminiError.invalidKey
         case 429: throw GeminiError.rateLimited
         default: throw GeminiError.server(http.statusCode)
         }
 
-        guard
-            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let candidates = root["candidates"] as? [[String: Any]],
-            let content = candidates.first?["content"] as? [String: Any],
-            let parts = content["parts"] as? [[String: Any]],
-            let text = parts.compactMap({ $0["text"] as? String }).first,
-            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else {
-            throw GeminiError.emptyResponse
-        }
+        let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        let candidate = (root?["candidates"] as? [[String: Any]])?.first
+        let finishReason = candidate?["finishReason"] as? String
 
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = ((candidate?["content"] as? [String: Any])?["parts"] as? [[String: Any]])?
+            .compactMap { $0["text"] as? String }
+            .joined()
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        // Never show a sentence that stops mid-number.
+        if finishReason == "MAX_TOKENS" {
+            throw GeminiError.truncated
+        }
+        guard !text.isEmpty else { throw GeminiError.emptyResponse }
+
+        return text
     }
 }

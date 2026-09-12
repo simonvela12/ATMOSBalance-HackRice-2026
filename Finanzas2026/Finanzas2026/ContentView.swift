@@ -11,6 +11,7 @@ struct ContentView: View {
     @State private var showingAddEntry = false
     @State private var showingWhatIf = false
     @State private var showingAddGoal = false
+    @State private var showingAccounts = false
     @State private var showingCalendar = false
     @State private var showingFullMonth = false
     @State private var addedEntries: [FinancialEntry] = []
@@ -257,6 +258,12 @@ struct ContentView: View {
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
+        .sheet(isPresented: $showingAccounts) {
+            AccountsSheet()
+                .environmentObject(bankStore)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+        }
         .sheet(isPresented: $showingAddGoal) {
             AddGoalSheet(existingGoal: goalBeingEdited) { goal in
                 if let index = goals.firstIndex(where: { $0.id == goal.id }) {
@@ -320,20 +327,20 @@ struct ContentView: View {
 
             Spacer()
 
-            Text("DEMO")
+            Text(bankStore.isLinked ? "LINKED" : "NOT LINKED")
                 .font(.helvetica(.caption2, weight: .bold))
                 .tracking(0.8)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .background(.white.opacity(0.12), in: Capsule())
 
-            Button(action: {}) {
+            Button { showingAccounts = true } label: {
                 Image(systemName: "person.crop.circle.fill")
                     .font(.system(size: 30))
                     .symbolRenderingMode(.hierarchical)
                     .foregroundStyle(.white.opacity(0.92))
             }
-            .accessibilityLabel("Profile")
+            .accessibilityLabel("Accounts and bank connection")
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 20)
@@ -471,6 +478,7 @@ struct ContentView: View {
     private var goalsSection: some View {
         GoalsCard(
             goals: displayGoals,
+            accrued: savingsAllocation.mapValues { Int($0.rounded()) },
             onAdd: {
                 goalBeingEdited = nil
                 showingAddGoal = true
@@ -1088,6 +1096,7 @@ private struct MiniMetric: View {
 
 private struct GoalsCard: View {
     let goals: [FinancialGoal]
+    let accrued: [UUID: Int]
     let onAdd: () -> Void
     let onEdit: (FinancialGoal) -> Void
     let onDelete: (FinancialGoal) -> Void
@@ -1143,6 +1152,7 @@ private struct GoalsCard: View {
                         ForEach(goals) { goal in
                             GoalProgressTile(
                                 goal: goal,
+                                accrued: accrued[goal.id] ?? 0,
                                 onEdit: { onEdit(goal) },
                                 onDelete: { onDelete(goal) }
                             )
@@ -1163,6 +1173,7 @@ private struct GoalsCard: View {
 
 private struct GoalProgressTile: View {
     let goal: FinancialGoal
+    let accrued: Int
     let onEdit: () -> Void
     let onDelete: () -> Void
 
@@ -1192,9 +1203,19 @@ private struct GoalProgressTile: View {
                 .font(.helvetica(.headline, weight: .semibold))
                 .lineLimit(1)
 
-            Text(goal.targetDate, format: .dateTime.month(.abbreviated).day().year())
-                .font(.helvetica(.caption2, weight: .medium))
-                .foregroundStyle(.white.opacity(0.48))
+            HStack(spacing: 6) {
+                Text(goal.targetDate, format: .dateTime.month(.abbreviated).day().year())
+                    .font(.helvetica(.caption2, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.48))
+                if goal.mustHappen {
+                    Text("MUST HAPPEN")
+                        .font(.helvetica(.caption2, weight: .bold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.sunGold.opacity(0.18), in: Capsule())
+                        .foregroundStyle(Color.sunGold)
+                }
+            }
 
             ProgressView(value: goal.progress)
                 .tint(Color.sunGold)
@@ -1210,6 +1231,14 @@ private struct GoalProgressTile: View {
                     .font(.helvetica(.caption, weight: .bold))
                     .foregroundStyle(Color.sunGold)
             }
+
+            // Makes the accrual visible, rather than it silently inflating `saved`.
+            Text(accrued > 0
+                 ? "Includes $\(accrued.formatted()) saved by underspending"
+                 : "Spend under your usual week to build this up")
+                .font(.helvetica(.caption2))
+                .foregroundStyle(.white.opacity(0.45))
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(14)
         .frame(width: 230, alignment: .leading)
@@ -1227,7 +1256,7 @@ private struct AddGoalSheet: View {
     @State private var savedText = ""
     @State private var targetDate = Calendar.current.date(byAdding: .month, value: 4, to: MockForecast.todayDate) ?? MockForecast.todayDate
     @State private var symbol = "airplane"
-    @State private var mustHappen = false
+    @State private var mustHappen = true
 
     init(existingGoal: FinancialGoal? = nil, onSave: @escaping (FinancialGoal) -> Void) {
         self.existingGoal = existingGoal
@@ -1237,7 +1266,7 @@ private struct AddGoalSheet: View {
         _savedText = State(initialValue: existingGoal.map { String($0.saved) } ?? "")
         _targetDate = State(initialValue: existingGoal?.targetDate ?? Calendar.current.date(byAdding: .month, value: 4, to: MockForecast.todayDate) ?? MockForecast.todayDate)
         _symbol = State(initialValue: existingGoal?.symbol ?? "airplane")
-        _mustHappen = State(initialValue: existingGoal?.mustHappen ?? false)
+        _mustHappen = State(initialValue: existingGoal?.mustHappen ?? true)
     }
 
     private var targetAmount: Int { Int(amountText.filter(\.isNumber)) ?? 0 }
@@ -1603,6 +1632,216 @@ private struct WhatIfSheet: View {
                     ?? "Could not reach Gemini."
             }
             isExplaining = false
+        }
+    }
+}
+
+/// Your accounts, and the connection behind them.
+///
+/// Previously the only way to reach the bank connection was a floating button
+/// that sat underneath the profile button in the top bar, so it was effectively
+/// unreachable. This is the one place for both.
+private struct AccountsSheet: View {
+    @EnvironmentObject private var bankStore: BankAccountStore
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var apiKey = ""
+    @State private var customerID = ""
+    @State private var showingCredentials = false
+
+    private static let money = FloatingPointFormatStyle<Double>.Currency(code: "USD")
+        .precision(.fractionLength(2))
+
+    private var isConnecting: Bool {
+        if case .connecting = bankStore.phase { return true }
+        return false
+    }
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: MoneyWeather.partlySunny.backgroundColors,
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+
+            ScrollView {
+                VStack(spacing: 18) {
+                    SheetTitle(
+                        eyebrow: "ACCOUNTS",
+                        title: bankStore.isLinked ? "Your linked money" : "No accounts linked yet",
+                        symbol: "building.columns.fill"
+                    )
+
+                    if bankStore.isLinked {
+                        VStack(spacing: 6) {
+                            Text("AVAILABLE CASH")
+                                .font(.helvetica(.caption, weight: .bold))
+                                .tracking(1.1)
+                                .foregroundStyle(.white.opacity(0.6))
+                            Text(Self.money.format(bankStore.totalAvailableCash))
+                                .font(.helvetica(size: 44, weight: .thin))
+                                .monospacedDigit()
+                            Text("Excludes credit cards")
+                                .font(.helvetica(.caption))
+                                .foregroundStyle(.white.opacity(0.5))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 18)
+                        .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+
+                        VStack(spacing: 0) {
+                            ForEach(Array(bankStore.accounts.enumerated()), id: \.element.id) { index, account in
+                                accountRow(account)
+                                if index < bankStore.accounts.count - 1 {
+                                    Divider().overlay(.white.opacity(0.12))
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+
+                        statusCard
+                    }
+
+                    credentialsCard
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 28)
+            }
+            .scrollIndicators(.hidden)
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private func accountRow(_ account: FinanceCore.FinancialAccount) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: symbol(for: account.accountType))
+                .frame(width: 34, height: 34)
+                .background(.white.opacity(0.1), in: Circle())
+            VStack(alignment: .leading, spacing: 2) {
+                Text(account.name).font(.helvetica(.subheadline, weight: .semibold))
+                Text(label(for: account.accountType))
+                    .font(.helvetica(.caption))
+                    .foregroundStyle(.white.opacity(0.54))
+            }
+            Spacer()
+            Text(Self.money.format(Double(account.balanceMinorUnits) / 100))
+                .font(.helvetica(.subheadline, weight: .bold))
+                .monospacedDigit()
+        }
+        .padding(.vertical, 14)
+    }
+
+    private var statusCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("SYNC")
+                .font(.helvetica(.caption, weight: .bold))
+                .tracking(1.1)
+                .foregroundStyle(.white.opacity(0.6))
+
+            Text(statusText)
+                .font(.helvetica(.subheadline))
+                .foregroundStyle(.white.opacity(0.85))
+
+            if let last = bankStore.accounts.map(\.lastSyncedAt).max() {
+                Text("Last updated " + last.formatted(.dateTime.month(.abbreviated).day().hour().minute()))
+                    .font(.helvetica(.caption))
+                    .foregroundStyle(.white.opacity(0.5))
+            }
+
+            if bankStore.canRefresh {
+                Button("Refresh now") {
+                    Task { await bankStore.refreshLinkedAccounts() }
+                }
+                .font(.helvetica(.subheadline, weight: .semibold))
+                .foregroundStyle(Color.sunGold)
+                .disabled(isConnecting)
+                .padding(.top, 4)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var statusText: String {
+        switch bankStore.phase {
+        case .connecting: return "Syncing with your bank now."
+        case .loadingCache: return "Loading saved bank data."
+        case .failed(let message): return message
+        case .connected:
+            if bankStore.hasPartialSync {
+                return "Updated, but one account could not be read in full. Its history may be incomplete."
+            }
+            return "Up to date."
+        case .idle: return "Nothing linked yet."
+        }
+    }
+
+    @ViewBuilder private var credentialsCard: some View {
+        if showingCredentials || !bankStore.isLinked {
+            VStack(spacing: 14) {
+                EntryCard(title: "NESSIE API KEY") {
+                    SecureField("API key", text: $apiKey)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                }
+                EntryCard(title: "CUSTOMER ID") {
+                    TextField("Customer ID", text: $customerID)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                }
+
+                Text("Credentials stay on this device and are never committed to the repository.")
+                    .font(.helvetica(.caption))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .multilineTextAlignment(.center)
+
+                PrimarySheetButton(
+                    title: isConnecting ? "Connecting…" : "Connect",
+                    enabled: !isConnecting
+                        && !apiKey.trimmingCharacters(in: .whitespaces).isEmpty
+                        && !customerID.trimmingCharacters(in: .whitespaces).isEmpty
+                ) {
+                    Task {
+                        await bankStore.linkNessieAccount(
+                            apiKey: apiKey.trimmingCharacters(in: .whitespacesAndNewlines),
+                            customerID: customerID.trimmingCharacters(in: .whitespacesAndNewlines)
+                        )
+                        if bankStore.isLinked {
+                            apiKey = ""
+                            customerID = ""
+                            showingCredentials = false
+                        }
+                    }
+                }
+            }
+        } else {
+            Button("Connect another account") { showingCredentials = true }
+                .font(.helvetica(.subheadline, weight: .semibold))
+                .foregroundStyle(Color.sunGold)
+        }
+    }
+
+    private func symbol(for type: FinanceCore.AccountType) -> String {
+        switch type {
+        case .checking: return "banknote.fill"
+        case .savings: return "chart.line.uptrend.xyaxis"
+        case .creditCard: return "creditcard.fill"
+        case .cash: return "dollarsign.circle.fill"
+        case .other: return "building.columns.fill"
+        }
+    }
+
+    private func label(for type: FinanceCore.AccountType) -> String {
+        switch type {
+        case .checking: return "Checking"
+        case .savings: return "Savings"
+        case .creditCard: return "Credit card"
+        case .cash: return "Cash"
+        case .other: return "Account"
         }
     }
 }
@@ -2345,6 +2584,53 @@ private enum RepeatEnding: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+
+
+/// Everything the user has told the app about their own plan: goals they added,
+/// entries they scheduled, and the cash they want left untouched.
+///
+/// Nothing here is seeded with example data. An account with no goals and no
+/// entries produces an empty plan, and the forecast shows only what the bank
+/// actually reports.
+private struct UserPlan: Codable, Equatable {
+    var goals: [FinancialGoal] = []
+    var entries: [FinancialEntry] = []
+    var minimumCashReserve: Double?
+    var deletedForecastDays: Set<String> = []
+    var excludedOccurrences: Set<String> = []
+    var occurrenceNameOverrides: [String: String] = [:]
+
+    static let empty = UserPlan()
+}
+
+private enum PlanPersistence {
+    private static var fileURL: URL {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return support
+            .appendingPathComponent("Finanzas2026", isDirectory: true)
+            .appendingPathComponent("user-plan.json")
+    }
+
+    static func load() -> UserPlan {
+        guard let data = try? Data(contentsOf: fileURL) else { return .empty }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return (try? decoder.decode(UserPlan.self, from: data)) ?? .empty
+    }
+
+    static func save(_ plan: UserPlan) {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? encoder.encode(plan) else { return }
+        try? FileManager.default.createDirectory(
+            at: fileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try? data.write(to: fileURL, options: .atomic)
+    }
+}
+
 private struct FinancialGoal: Identifiable, Codable, Equatable {
     let id: UUID
     var name: String
@@ -2772,161 +3058,6 @@ private struct BalancePoint: Identifiable {
     let isAnchor: Bool
 }
 
-/// Real financial data, shaped for Marc's forecast views.
-///
-/// Marc's forecast UI is kept exactly as-is; this supplies the numbers it used to
-/// take from demo data. Recorded days come from linked-bank transactions, future
-/// days come from FinancialCore's projected cash path.
-/// Everything the user has told the app about their own plan: goals they added,
-/// entries they scheduled, and the cash they want left untouched.
-///
-/// Nothing here is seeded with example data. An account with no goals and no
-/// entries produces an empty plan, and the forecast shows only what the bank
-/// actually reports.
-private struct UserPlan: Codable, Equatable {
-    var goals: [FinancialGoal] = []
-    var entries: [FinancialEntry] = []
-    var minimumCashReserve: Double?
-    var deletedForecastDays: Set<String> = []
-    var excludedOccurrences: Set<String> = []
-    var occurrenceNameOverrides: [String: String] = [:]
-
-    static let empty = UserPlan()
-}
-
-private enum PlanPersistence {
-    private static var fileURL: URL {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return support
-            .appendingPathComponent("Finanzas2026", isDirectory: true)
-            .appendingPathComponent("user-plan.json")
-    }
-
-    static func load() -> UserPlan {
-        guard let data = try? Data(contentsOf: fileURL) else { return .empty }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return (try? decoder.decode(UserPlan.self, from: data)) ?? .empty
-    }
-
-    static func save(_ plan: UserPlan) {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? encoder.encode(plan) else { return }
-        try? FileManager.default.createDirectory(
-            at: fileURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try? data.write(to: fileURL, options: .atomic)
-    }
-}
-
-private struct LiveFinancialContext {
-    let profile: FinancialProfile?
-    let transactions: [FinanceCore.FinancialTransaction]
-    let timeline: [CashFlowPoint]
-
-    /// Grouped once at construction: these lookups run for every rendered day.
-    private let transactionsByDay: [Date: [FinanceCore.FinancialTransaction]]
-    private let timelineByDay: [Date: CashFlowPoint]
-
-    init(
-        profile: FinancialProfile?,
-        transactions: [FinanceCore.FinancialTransaction],
-        timeline: [CashFlowPoint]
-    ) {
-        self.profile = profile
-        self.transactions = transactions
-        self.timeline = timeline
-
-        let calendar = AppFinancialData.calendar
-        self.transactionsByDay = Dictionary(
-            grouping: transactions.filter { !$0.isPending && !$0.isTransfer },
-            by: { calendar.startOfDay(for: $0.transactionDate) }
-        )
-        self.timelineByDay = Dictionary(
-            timeline.map { (calendar.startOfDay(for: $0.date), $0) },
-            uniquingKeysWith: { first, _ in first }
-        )
-    }
-
-    static let empty = LiveFinancialContext(profile: nil, transactions: [], timeline: [])
-
-    private var calendar: Calendar { AppFinancialData.calendar }
-
-    var hasData: Bool { profile != nil }
-
-    // MARK: Per-day figures
-
-    func recorded(on date: Date) -> (income: Int, expenses: Int, incomeSource: String, expenseSource: String) {
-        let day = calendar.startOfDay(for: date)
-        let items = transactionsByDay[day] ?? []
-        let inflow = items.filter { $0.direction == .inflow }
-        let outflow = items.filter { $0.direction == .outflow }
-        return (
-            income: Int((inflow.reduce(0) { $0 + Double($1.amountMinorUnits) / 100 }).rounded()),
-            expenses: Int((outflow.reduce(0) { $0 + Double($1.amountMinorUnits) / 100 }).rounded()),
-            incomeSource: Self.label(inflow),
-            expenseSource: Self.label(outflow)
-        )
-    }
-
-    func health(on date: Date) -> FinancialHealthStatus? {
-        timelineByDay[calendar.startOfDay(for: date)]?.status
-    }
-
-    func projectedCash(on date: Date) -> Double? {
-        let day = calendar.startOfDay(for: date)
-        return timeline.last { calendar.startOfDay(for: $0.date) <= day }?.projectedCash
-    }
-
-    // MARK: Month figures
-
-    /// Balance at the end of a month. Future months read the projected path;
-    /// past months are reconstructed backwards from today's cash.
-    func balance(asOf cutoff: Date) -> Double? {
-        guard let profile else { return nil }
-        let day = calendar.startOfDay(for: cutoff)
-        let today = calendar.startOfDay(for: profile.asOfDate)
-
-        if day >= today {
-            return projectedCash(on: day) ?? profile.currentCash
-        }
-
-        let since = transactions
-            .filter { !$0.isPending && !$0.isTransfer }
-            .filter { calendar.startOfDay(for: $0.transactionDate) > day }
-            .reduce(0.0) { $0 + Double($1.signedAmountMinorUnits) / 100 }
-        return profile.currentCash - since
-    }
-
-    func overallWeather(for month: ForecastMonth) -> MoneyWeather? {
-        guard profile != nil else { return nil }
-        let statuses = timeline
-            .filter {
-                calendar.component(.year, from: $0.date) == month.year &&
-                calendar.component(.month, from: $0.date) == month.monthNumber
-            }
-            .map(\.status)
-
-        guard !statuses.isEmpty else { return nil }
-        if statuses.contains(.notSafe) { return .storm }
-        if statuses.contains(.tight) { return .rain }
-        return .sunny
-    }
-
-    // MARK: Labels
-
-    private static func label(_ items: [FinanceCore.FinancialTransaction]) -> String {
-        let sorted = items.sorted { $0.amountMinorUnits > $1.amountMinorUnits }
-        guard let first = sorted.first else { return "Nothing recorded" }
-        let name = AppFinancialData.label(first)
-        return sorted.count > 1 ? "\(name) + \(sorted.count - 1) more" : name
-    }
-
-}
-
 private enum MockForecast {
     static var todayDate: Date { Calendar(identifier: .gregorian).startOfDay(for: Date()) }
     static let balancePoints: [BalancePoint] = []
@@ -3041,7 +3172,15 @@ private enum MockForecast {
         if !hasData {
             adjustedWeather = .cloudy
         } else {
-            adjustedWeather = live.overallWeather(for: month) ?? comfortWeather(for: adjustedBalance)
+            if let health = live.health(year: month.year, month: month.monthNumber) {
+                switch health {
+                case .safe: adjustedWeather = .sunny
+                case .tight: adjustedWeather = .rain
+                case .notSafe: adjustedWeather = .storm
+                }
+            } else {
+                adjustedWeather = comfortWeather(for: adjustedBalance)
+            }
         }
 
         let days = makeDays(
