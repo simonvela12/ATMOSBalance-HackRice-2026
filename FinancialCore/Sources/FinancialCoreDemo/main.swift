@@ -89,6 +89,46 @@ do {
     print("Purchase limiting date:    \(formatter.string(from: ticket.explanation.limitingDate))")
     print("Headroom after purchase at tightest point: \(money(ticket.assessment.minimumRecommendedHeadroomAfterPurchase))")
     print("\nNote: target-date headroom and safe-to-spend-today are different because the engine checks the entire cash path, not only the final date.")
+
+    // Second miniature story: a purchase can be technically affordable on its own
+    // while making a flexible future goal less comfortable.
+    let whatIfAsOf = date(2026, 9, 1)
+    let miami = Goal(
+        name: "Miami",
+        targetAmount: 900,
+        deadline: date(2026, 10, 1),
+        priority: .flexible
+    )
+    let goalProfile = FinancialProfile(
+        currentCash: 2000,
+        asOfDate: whatIfAsOf,
+        personalReserveSteps: [
+            PersonalReserveStep(effectiveDate: whatIfAsOf, minimumCash: 500)
+        ],
+        goals: [miami],
+        spendingPolicy: SpendingPolicy(
+            lookbackWeeks: 6,
+            bufferWeeks: 0,
+            manualMinimumBuffer: 200
+        )
+    )
+
+    let whatIf = try FinancialInsights.analyzePurchaseWhatIf(
+        profile: goalProfile,
+        amount: 500,
+        purchaseDate: date(2026, 9, 10),
+        planningHorizon: date(2026, 10, 2),
+        calendar: calendar
+    )
+
+    print("\n=== Goal-aware What-If demo ===")
+    print("$500 optional purchase:    \(whatIf.purchaseAssessment.status.rawValue)")
+    if let impact = whatIf.goalImpacts.first {
+        print("Goal:                      \(impact.goal.name)")
+        print("Goal before purchase:      \(impact.before.status.rawValue)")
+        print("Goal after purchase:       \(impact.after.status.rawValue)")
+        print("Goal worsened:             \(impact.worsened ? "YES" : "NO")")
+    }
 } catch {
     fputs("FinancialCore demo failed: \(error)\n", stderr)
     exit(1)
