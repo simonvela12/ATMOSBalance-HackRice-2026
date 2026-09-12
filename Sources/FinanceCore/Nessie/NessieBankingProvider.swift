@@ -34,18 +34,35 @@ public struct NessieBankingProvider: BankingProvider, Sendable {
         let (purchases, deposits, withdrawals, transfers) = try await
             (purchasesRequest, depositsRequest, withdrawalsRequest, transfersRequest)
 
-        var normalized: [ExternalBankTransaction] = []
-        for purchase in purchases {
-            let merchant: MerchantDetails? = if let id = purchase.merchantID {
-                await merchantCache.details(id: id, client: client)
-            } else { nil }
-            normalized.append(try NessieMapper.purchase(purchase, account: account,
-                                                        merchantName: merchant?.name,
-                                                        category: merchant?.category))
+        let merchantIDs = Set(purchases.compactMap(\.merchantID))
+        let merchantsByID = await withTaskGroup(of: MerchantLookup.self,
+                                                returning: [String: MerchantDetails].self) { group in
+            for id in merchantIDs {
+                group.addTask {
+                    MerchantLookup(id: id, details: await merchantCache.details(id: id, client: client))
+                }
+            }
+            var values: [String: MerchantDetails] = [:]
+            for await result in group {
+                if let details = result.details { values[result.id] = details }
+            }
+            return values
+        }
+
+        var normalized = try purchases.map { purchase in
+            let merchant = purchase.merchantID.flatMap { merchantsByID[$0] }
+            return try NessieMapper.purchase(purchase, account: account,
+                                             merchantName: merchant?.name,
+                                             category: merchant?.category)
         }
         normalized += try deposits.map { try NessieMapper.deposit($0, account: account) }
         normalized += try withdrawals.map { try NessieMapper.withdrawal($0, account: account) }
         normalized += try transfers.map { try NessieMapper.transfer($0, account: account) }
         return normalized
     }
+}
+
+private struct MerchantLookup: Sendable {
+    let id: String
+    let details: MerchantDetails?
 }

@@ -24,10 +24,9 @@ public actor URLSessionNessieTransport: NessieTransport {
 public struct NessieAPIClient: Sendable {
     private let configuration: NessieConfiguration
     private let transport: any NessieTransport
-    private let decoder: JSONDecoder
 
     public init(configuration: NessieConfiguration, transport: any NessieTransport = URLSessionNessieTransport()) {
-        self.configuration = configuration; self.transport = transport; self.decoder = JSONDecoder()
+        self.configuration = configuration; self.transport = transport
     }
 
     func accounts() async throws -> [NessieAccount] {
@@ -64,6 +63,7 @@ public struct NessieAPIClient: Sendable {
         guard let url = components?.url else { throw BankingError.invalidConfiguration("Invalid Nessie URL") }
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
+        request.timeoutInterval = configuration.requestTimeout
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
         let data: Data
@@ -77,11 +77,18 @@ public struct NessieAPIClient: Sendable {
         case 401, 403: throw BankingError.invalidAPIKey
         case 429: throw BankingError.rateLimited
         default:
-            let message = String(data: data.prefix(500), encoding: .utf8)
+            let message = (try? JSONDecoder().decode(NessieErrorPayload.self, from: data).message)
+                ?? String(data: data.prefix(500), encoding: .utf8)
             throw BankingError.serverError(statusCode: response.statusCode, message: message)
         }
 
-        do { return try decoder.decode(T.self, from: data) }
+        // A decoder is intentionally scoped to one request because this client performs
+        // several requests concurrently and JSONDecoder is mutable reference state.
+        do { return try JSONDecoder().decode(T.self, from: data) }
         catch { throw BankingError.decodingError(error.localizedDescription) }
     }
+}
+
+private struct NessieErrorPayload: Decodable {
+    let message: String?
 }
