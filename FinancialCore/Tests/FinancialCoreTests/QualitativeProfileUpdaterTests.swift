@@ -185,7 +185,19 @@ final class QualitativeProfileUpdaterTests: XCTestCase {
             referenceDate: anchor,
             label: "Campus job"
         )
-        let profile = FinancialProfile(currentCash: 1000, asOfDate: asOfDate)
+        let profile = FinancialProfile(
+            currentCash: 1000,
+            asOfDate: asOfDate,
+            incomeEvents: [
+                IncomeEvent(
+                    amount: 650,
+                    date: anchor,
+                    source: "Campus job",
+                    type: .oneTime,
+                    confidence: 1
+                )
+            ]
+        )
 
         let first = QualitativeProfileUpdater.apply(
             result,
