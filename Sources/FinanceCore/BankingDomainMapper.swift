@@ -7,6 +7,7 @@ enum BankingDomainMapper {
                                 externalAccountID: external.externalAccountID,
                                 externalCustomerID: external.externalCustomerID, name: external.name,
                                 accountType: external.accountType, balanceMinorUnits: external.balanceMinorUnits,
+                                providerReportedBalanceMinorUnits: external.balanceMinorUnits,
                                 currencyCode: external.currencyCode, lastSyncedAt: syncedAt)
     }
 

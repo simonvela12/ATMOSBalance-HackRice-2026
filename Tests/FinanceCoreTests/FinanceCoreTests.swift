@@ -86,6 +86,28 @@ final class FinanceCoreTests: XCTestCase {
         XCTAssertEqual(stored.count, 2)
     }
 
+    func testNessieBalanceReconcilesOnlyNewCompletedTransactions() async throws {
+        let first = externalTransaction(id: "purchase:one", description: "One", amount: 500)
+        let provider = MockBankingProvider(account: account1, transactions: [first])
+        let repository = InMemoryFinancialRepository()
+        let service = BankSyncService(provider: provider, repository: repository)
+
+        _ = try await service.syncAll()
+        var storedAccounts = try await repository.accounts()
+        XCTAssertEqual(storedAccounts.first?.balanceMinorUnits, 100_00)
+
+        let second = externalTransaction(id: "purchase:two", description: "Two", amount: 725)
+        await provider.setTransactions([first, second])
+        _ = try await service.syncAll()
+        storedAccounts = try await repository.accounts()
+        XCTAssertEqual(storedAccounts.first?.balanceMinorUnits, 92_75)
+
+        // Re-fetching the same snapshot must not subtract the purchase again.
+        _ = try await service.syncAll()
+        storedAccounts = try await repository.accounts()
+        XCTAssertEqual(storedAccounts.first?.balanceMinorUnits, 92_75)
+    }
+
     func testSyncDiagnosticsReportPersistenceAndDeduplication() async throws {
         let collector = DiagnosticCollector()
         let diagnostics = BankingDiagnostics { event in await collector.append(event) }
