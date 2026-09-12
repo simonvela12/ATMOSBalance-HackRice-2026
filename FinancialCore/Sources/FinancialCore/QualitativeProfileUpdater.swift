@@ -114,9 +114,9 @@ public enum QualitativeProfileUpdater {
             }
         }
 
-        // Transaction-specific context is allowed to annotate linked financial data, not create
-        // a transaction that the profile never contained. This prevents stale/demo UI context from
-        // manufacturing future cash when its referenced bank transaction is missing.
+        // Expense-specific context may annotate linked financial data, but it must not create
+        // future cash from a transaction the profile never contained. This protects the engine
+        // from stale UI/demo context manufacturing reimbursements or recurring expenses.
         let hasSelectedExpense = updated.expenseEvents.contains {
             matchesSelectedExpense($0, context: context)
         }
@@ -137,11 +137,7 @@ public enum QualitativeProfileUpdater {
             }
         }
 
-        let hasSelectedIncome = updated.incomeEvents.contains {
-            matchesSelectedIncome($0, context: context)
-        }
         if context.subject == .income,
-           hasSelectedIncome,
            let recurring = try? QualitativeDirectiveMaterializer.recurringIncomeEvents(
                 from: result,
                 context: context,
@@ -262,18 +258,6 @@ public enum QualitativeProfileUpdater {
             return false
         }
         return true
-    }
-
-    /// Income transaction-specific context must be anchored to the selected linked transaction
-    /// when a reference date is available. Series operations can still use label + amount after
-    /// that anchor has been verified.
-    private static func matchesSelectedIncome(
-        _ event: IncomeEvent,
-        context: QualitativeNoteContext
-    ) -> Bool {
-        guard matchesIncomeSeries(event, context: context) else { return false }
-        guard let referenceDate = context.referenceDate else { return true }
-        return event.date == referenceDate
     }
 
     /// A generated recurring series is scoped by label and amount. This prevents confirming a
