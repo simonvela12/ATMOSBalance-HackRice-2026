@@ -15,6 +15,19 @@ The user should have two clear entry modes:
 
 Nothing that changes the plan should be applied silently. The app should interpret supported context, show the result back to the user, request missing information instead of guessing, and require confirmation.
 
+## Core planning principle: event-based, not salary-based
+
+The product must work well for college students and other users with sparse, irregular, or lumpy income.
+
+- Do not assume that users receive income every week, every two weeks, or every month.
+- A user may reasonably have **zero income for several months**, followed by one large family transfer, refund, stipend, freelance payment, or other one-time deposit.
+- Historical deposits must never create future recurring income unless the user explicitly confirms recurrence.
+- If no future income events are confirmed for a period, the forecast should show **$0 future income for that period**.
+- Recurrence is an explicit property of an income event, not a default behavior inferred from bank history.
+- One-time, irregular, and recurring income must coexist in the same plan.
+- Large one-time deposits must be represented on their actual expected date rather than spread evenly across time.
+- Safe to Spend and Calendar must respect the actual dated cash path, including long gaps with no income.
+
 ## Supported concepts already agreed
 
 ### Income
@@ -22,7 +35,7 @@ Nothing that changes the plan should be applied silently. The app should interpr
 - One-time income.
 - Recurring income.
 - Irregular / uncertain income.
-- Weekly, biweekly, and monthly recurrence.
+- Weekly, biweekly, and monthly recurrence only when explicitly provided or confirmed by the user.
 - Expected future income with amount, date, and confidence.
 - Confidence UX is confirmed as: **Confirmed 100% / Likely 70% / Possible 30% / Custom %**.
 - Custom confidence accepts an explicit user-entered percentage such as 55%, 65%, or 80%.
@@ -30,7 +43,20 @@ Nothing that changes the plan should be applied silently. The app should interpr
 - Variable recurring income is supported. The simple path uses one **expected amount per occurrence**.
 - Users who want more precision can optionally provide a **minimum and maximum amount** in addition to the expected amount.
 - The app must not force users to enter a range; the expected amount alone is sufficient.
-- When a range is supplied, the expected amount remains the normal planning value while the minimum/maximum can support conservative and optimistic views and make variability explicit.
+- When a recurring-income range is supplied, scenario amounts are explicit and deterministic:
+  - **Conservative = minimum amount**
+  - **Expected = expected amount**
+  - **Optimistic = maximum amount**
+- These min/expected/max scenario rules apply only to an income stream the user explicitly marked as recurring; they never create recurrence by themselves.
+- A non-recurring uncertain income can still use confidence without implying that similar future deposits will occur.
+
+Examples the model must support:
+
+- `$550 every 2 weeks`, optionally with `$450 minimum / $650 maximum`.
+- `$800 on Sep 25`, likely 70%, and no other expected income afterward.
+- `$0 expected income for the next 3 months`.
+- `$3,000 family transfer on Dec 1`, one time.
+- An irregular tutoring payment on one specific date without any implied next payment.
 
 ### Expenses
 
@@ -85,6 +111,7 @@ Examples:
 - Amount
 - Date
 - Confidence: Confirmed 100% / Likely 70% / Possible 30% / Custom %
+- Recurrence defaults to **No** unless the user explicitly chooses otherwise
 
 **Variable recurring income**
 - Expected amount — required
@@ -92,6 +119,14 @@ Examples:
 - First or next expected date
 - Optional advanced range: Minimum amount / Maximum amount
 - Example: expected $550 every 2 weeks, optionally $450 minimum and $650 maximum
+- Scenario mapping: Conservative $450 / Expected $550 / Optimistic $650
+
+**One-time family/support income**
+- Amount
+- Expected date
+- Confidence
+- Recurrence: No
+- Example: $3,000 from family on Dec 1
 
 **Someone owes me**
 - Original transaction anchor
@@ -167,6 +202,8 @@ Confidence behavior:
 - Never silently guess missing amount, date, cadence, or reimbursement amount.
 - Preserve deterministic and explainable planning behavior.
 - Do not introduce opaque financial scores or probability claims beyond explicit user-provided confidence.
+- Zero-income periods are valid states, not missing data to be filled automatically.
+- Dated one-time income should affect the cash path only on and after its actual expected date.
 
 ## Confirmed decisions
 
@@ -175,6 +212,8 @@ Confidence behavior:
 3. Future expenses can be created before they appear in bank data. Required inputs are **amount, date, whether the user must pay it, whether it can be reduced/canceled, and whether it recurs**. Recurrence choices are **No / Weekly / Every 2 weeks / Monthly**. Confirmed future expenses immediately affect the shared financial plan.
 4. If the user marks an expense as **Maybe** reducible/cancelable, the baseline forecast remains conservative and includes the **full amount**. The app may show up to that full amount as potential savings, but it does not assume any reduction until the user explicitly changes or cancels the expense.
 5. Variable recurring income uses a **required expected amount** plus an **optional minimum–maximum range**. The range is optional and should add precision without making the basic flow more complicated.
+6. For an explicitly recurring variable income with a supplied range, scenarios use **minimum / expected / maximum** directly: Conservative = minimum, Expected = expected, Optimistic = maximum.
+7. The entire income model is **event-based rather than salary-based**. The product must support long periods of zero income, one-time family transfers, isolated refunds, stipends, freelance payments, and other sparse/lumpy cash inflows without inventing recurrence.
 
 ## Open decisions
 
