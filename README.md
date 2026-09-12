@@ -18,6 +18,14 @@ NESSIE_CUSTOMER_ID=your_customer_id
 
 Alternatively, leave it blank and enter the customer ID when the executable prompts. The included key is for the mock Nessie sandbox only; replace this arrangement with backend-managed secrets before integrating any real financial provider.
 
+To run the complete synchronization flow without network access, set:
+
+```text
+FINANCECORE_USE_DEMO_DATA=true
+```
+
+The local demo provides one checking account and four deterministic transactions (paycheck, groceries, rent, and refund). It writes to `.finance-data/demo-finance-store.json` and exercises the same synchronization and deduplication code as Nessie.
+
 ## Run on Windows
 
 Open **Developer PowerShell for VS 2022**, change to this directory, and run:
@@ -33,6 +41,8 @@ Run tests with:
 ```powershell
 swift test
 ```
+
+The suite includes end-to-end Nessie contract tests with a routed HTTP transport: authenticated request construction, every account transaction endpoint, merchant enrichment and caching, status-code mapping, malformed payload rejection, stable fallback IDs, file persistence/reload, and duplicate detection.
 
 If `swift` is not recognized, restart VS Code so it receives the updated user `PATH`. If `link` is not found, launch VS Code from Developer PowerShell for VS 2022.
 

@@ -17,15 +17,18 @@ The future iPhone app can import the `FinanceCore` library and replace the comma
 
 ## Nessie configuration
 
-The configured sandbox host is `http://api.nessieisreal.com`, the host currently referenced by Capital One hackathon materials and the official `nessieisreal` GitHub organization. The API key is sent as the `key` query parameter, matching Nessie's API.
+The configured sandbox host is `https://api.nessieisreal.com`. The official `nessieisreal` GitHub organization references the same host over HTTP, but HTTPS avoids clear-text API keys and works in environments that reject plain HTTP. The API key is sent as the `key` query parameter, matching Nessie's API.
 
 Configuration is loaded from process environment variables first and `.env` second:
 
 - `NESSIE_API_KEY`
 - `NESSIE_CUSTOMER_ID`
 - `NESSIE_BASE_URL`
+- `FINANCECORE_USE_DEMO_DATA` (`true` enables the deterministic offline provider)
 
 The `financecore-nessie` hackathon branch intentionally tracks `.env` with the shared mock-sandbox key so collaborators can run it immediately. A real provider secret must instead be held behind a backend and must never ship in an iOS client.
+
+`DemoBankingProvider` supplies one local checking account and four transactions without HTTP. It implements the same `BankingProvider` protocol, so the demo validates mapping, persistence, and deduplication through the production synchronization service rather than bypassing it.
 
 ## Connection and sync
 
@@ -40,6 +43,8 @@ Run `swift run`. If `NESSIE_CUSTOMER_ID` is blank, the demo asks for it. A sync 
 7. Updates the connection's `lastSyncedAt` only after all remote reads succeed.
 
 Nessie does not expose a cursor in this integration. Each run fetches the available history and deduplicates locally.
+
+Independent account histories, transaction resource types, and unique merchant lookups are fetched concurrently. Each HTTP response receives its own `JSONDecoder`, avoiding shared mutable decoding state under Swift concurrency. Requests use a configurable 20-second timeout by default.
 
 ## Deduplication
 
