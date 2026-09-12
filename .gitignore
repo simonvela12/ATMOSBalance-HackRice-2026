@@ -2,12 +2,11 @@
 __pycache__/
 *.pyc
 
-# macOS
-.DS_Store
-
 # Xcode user-specific files
 xcuserdata/
 *.xcuserstate
+
+# Build output
 DerivedData/
 *.moved-aside
 *.xccheckout
@@ -15,3 +14,14 @@ DerivedData/
 
 # Swift Package Manager
 .build/
+build/
+.build-codex/
+.swift-cache/
+.swiftpm/
+
+# Local bank sandbox configuration
+.env
+.finance-data/
+
+# macOS
+.DS_Store

@@ -1,0 +1,472 @@
+import XCTest
+@testable import FinancialCore
+
+final class QualitativeProfileUpdaterTests: XCTestCase {
+    private var calendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar
+    }
+
+    private var asOfDate: Date {
+        calendar.date(from: DateComponents(year: 2026, month: 9, day: 12))!
+    }
+
+    private var horizon: Date {
+        calendar.date(from: DateComponents(year: 2026, month: 11, day: 30))!
+    }
+
+    func testIncompleteInterpretationDoesNotMutateProfile() {
+        let profile = FinancialProfile(
+            currentCash: 1000,
+            asOfDate: asOfDate,
+            expenseEvents: [
+                ExpenseEvent(amount: 25, date: horizon, category: "Streaming", essential: false, committed: true)
+            ]
+        )
+        let result = QualitativeParseResult(
+            originalText: "recurring",
+            directives: [.setExpenseCommitted(false)],
+            missingFields: [.recurrenceCadence],
+            matchedRules: ["expense-not-committed", "expense-recurring-missing-cadence"]
+        )
+
+        let application = QualitativeProfileUpdater.apply(
+            result,
+            to: profile,
+            context: QualitativeNoteContext(subject: .expense, referenceAmount: 25, label: "Streaming"),
+            through: horizon,
+            calendar: calendar
+        )
+
+        XCTAssertFalse(application.didChange)
+        XCTAssertEqual(application.profile.expenseEvents.first?.committed, true)
+    }
+
+    func testExistingExpenseStateReturnsNoChange() {
+        let profile = FinancialProfile(
+            currentCash: 1000,
+            asOfDate: asOfDate,
+            expenseEvents: [
+                ExpenseEvent(amount: 25, date: horizon, category: "Streaming", essential: false, committed: false)
+            ]
+        )
+        let result = QualitativeParseResult(
+            originalText: "optional",
+            directives: [.setExpenseCommitted(false), .setExpenseEssential(false)],
+            missingFields: [],
+            matchedRules: ["expense-not-committed", "expense-nonessential"]
+        )
+
+        let application = QualitativeProfileUpdater.apply(
+            result,
+            to: profile,
+            context: QualitativeNoteContext(subject: .expense, referenceAmount: 25, label: "Streaming"),
+            through: horizon,
+            calendar: calendar
+        )
+
+        XCTAssertFalse(application.didChange)
+        XCTAssertEqual(application.profile.expenseEvents.count, 1)
+    }
+
+    func testExpenseCommitmentChangeIsReportedAndApplied() {
+        let eventDate = calendar.date(from: DateComponents(year: 2026, month: 9, day: 30))!
+        let profile = FinancialProfile(
+            currentCash: 1000,
+            asOfDate: asOfDate,
+            expenseEvents: [
+                ExpenseEvent(amount: 25, date: eventDate, category: "Streaming", essential: false, committed: true)
+            ]
+        )
+        let result = QualitativeParseResult(
+            originalText: "optional",
+            directives: [.setExpenseCommitted(false)],
+            missingFields: [],
+            matchedRules: ["expense-not-committed"]
+        )
+
+        let application = QualitativeProfileUpdater.apply(
+            result,
+            to: profile,
+            context: QualitativeNoteContext(subject: .expense, referenceAmount: 25, label: "Streaming"),
+            through: horizon,
+            calendar: calendar
+        )
+
+        XCTAssertTrue(application.didChange)
+        XCTAssertEqual(application.profile.expenseEvents.first?.committed, false)
+    }
+
+    func testExpenseDirectiveOnlyChangesSelectedTransaction() {
+        let selectedDate = calendar.date(from: DateComponents(year: 2026, month: 9, day: 30))!
+        let otherDate = calendar.date(from: DateComponents(year: 2026, month: 10, day: 15))!
+        let profile = FinancialProfile(
+            currentCash: 1000,
+            asOfDate: asOfDate,
+            expenseEvents: [
+                ExpenseEvent(amount: 25, date: selectedDate, category: "Dining", essential: true, committed: true),
+                ExpenseEvent(amount: 25, date: otherDate, category: "Dining", essential: true, committed: true)
+            ]
+        )
+        let result = QualitativeParseResult(
+            originalText: "I can skip this one",
+            directives: [.setExpenseCommitted(false), .setExpenseEssential(false)],
+            missingFields: [],
+            matchedRules: ["expense-not-committed", "expense-nonessential"]
+        )
+        let context = QualitativeNoteContext(
+            subject: .expense,
+            referenceAmount: 25,
+            referenceDate: selectedDate,
+            label: "Dining"
+        )
+
+        let application = QualitativeProfileUpdater.apply(
+            result,
+            to: profile,
+            context: context,
+            through: horizon,
+            calendar: calendar
+        )
+
+        let selected = application.profile.expenseEvents.first { $0.date == selectedDate }
+        let other = application.profile.expenseEvents.first { $0.date == otherDate }
+        XCTAssertTrue(application.didChange)
+        XCTAssertEqual(selected?.committed, false)
+        XCTAssertEqual(selected?.essential, false)
+        XCTAssertEqual(other?.committed, true)
+        XCTAssertEqual(other?.essential, true)
+    }
+
+    func testIncomeTypeDirectiveActuallyChangesMatchingIncome() {
+        let incomeDate = calendar.date(from: DateComponents(year: 2026, month: 9, day: 20))!
+        let profile = FinancialProfile(
+            currentCash: 1000,
+            asOfDate: asOfDate,
+            incomeEvents: [
+                IncomeEvent(amount: 400, date: incomeDate, source: "Campus job", type: .recurring)
+            ]
+        )
+        let result = QualitativeParseResult(
+            originalText: "irregular",
+            directives: [.setIncomeType(.irregular), .setIrregularIncomeConfidence(0.6)],
+            missingFields: [],
+            matchedRules: ["income-irregular", "income-confidence"]
+        )
+
+        let application = QualitativeProfileUpdater.apply(
+            result,
+            to: profile,
+            context: QualitativeNoteContext(subject: .income, referenceAmount: 400, label: "Campus job"),
+            through: horizon,
+            calendar: calendar
+        )
+
+        XCTAssertTrue(application.didChange)
+        XCTAssertEqual(application.profile.incomeEvents.first?.type, .irregular)
+        XCTAssertEqual(application.profile.incomeEvents.first?.confidence ?? -1, 0.6, accuracy: 0.000_001)
+    }
+
+    func testConfirmingSameRecurringInterpretationTwiceIsIdempotent() {
+        let anchor = calendar.date(from: DateComponents(year: 2026, month: 9, day: 6))!
+        let result = QualitativeParseResult(
+            originalText: "every two weeks",
+            directives: [
+                .setIncomeType(.recurring),
+                .setRecurrence(cadence: .biweekly, firstDate: nil)
+            ],
+            missingFields: [],
+            matchedRules: ["income-recurring", "income-recurrence"]
+        )
+        let context = QualitativeNoteContext(
+            subject: .income,
+            referenceAmount: 650,
+            referenceDate: anchor,
+            label: "Campus job"
+        )
+        let profile = FinancialProfile(
+            currentCash: 1000,
+            asOfDate: asOfDate,
+            incomeEvents: [
+                IncomeEvent(
+                    amount: 650,
+                    date: anchor,
+                    source: "Campus job",
+                    type: .oneTime,
+                    confidence: 1
+                )
+            ]
+        )
+
+        let first = QualitativeProfileUpdater.apply(
+            result,
+            to: profile,
+            context: context,
+            through: horizon,
+            calendar: calendar
+        )
+        let second = QualitativeProfileUpdater.apply(
+            result,
+            to: first.profile,
+            context: context,
+            through: horizon,
+            calendar: calendar
+        )
+
+        XCTAssertTrue(first.didChange)
+        XCTAssertFalse(second.didChange)
+        XCTAssertEqual(second.profile.incomeEvents.count, first.profile.incomeEvents.count)
+        XCTAssertEqual(
+            second.profile.incomeEvents.map(\.date).sorted(),
+            first.profile.incomeEvents.map(\.date).sorted()
+        )
+    }
+
+    func testIdenticalReimbursementDoesNotDuplicateOrReportChange() {
+        let repaymentDate = calendar.date(from: DateComponents(year: 2026, month: 9, day: 18))!
+        let existing = IncomeEvent(
+            amount: 85,
+            date: repaymentDate,
+            source: "Reimbursement: Dinner",
+            type: .oneTime,
+            confidence: 1
+        )
+        let profile = FinancialProfile(
+            currentCash: 1000,
+            asOfDate: asOfDate,
+            incomeEvents: [existing]
+        )
+        let result = QualitativeParseResult(
+            originalText: "pay me back Friday",
+            directives: [.expectReimbursement(on: repaymentDate)],
+            missingFields: [],
+            matchedRules: ["expense-reimbursement"]
+        )
+
+        let application = QualitativeProfileUpdater.apply(
+            result,
+            to: profile,
+            context: QualitativeNoteContext(subject: .expense, referenceAmount: 85, label: "Dinner"),
+            through: horizon,
+            calendar: calendar
+        )
+
+        XCTAssertFalse(application.didChange)
+        XCTAssertEqual(application.profile.incomeEvents.count, 1)
+        XCTAssertEqual(application.profile.incomeEvents.first?.id, existing.id)
+    }
+
+    func testRecurringExpensePreservesExistingQualitativeFlagsWhenOnlyCadenceChanges() {
+        let anchor = calendar.date(from: DateComponents(year: 2026, month: 9, day: 1))!
+        let profile = FinancialProfile(
+            currentCash: 1000,
+            asOfDate: asOfDate,
+            expenseEvents: [
+                ExpenseEvent(
+                    amount: 20,
+                    date: anchor,
+                    category: "Streaming",
+                    essential: false,
+                    committed: false
+                )
+            ]
+        )
+        let result = QualitativeParseResult(
+            originalText: "monthly",
+            directives: [.setRecurrence(cadence: .monthly, firstDate: nil)],
+            missingFields: [],
+            matchedRules: ["expense-recurrence"]
+        )
+        let context = QualitativeNoteContext(
+            subject: .expense,
+            referenceAmount: 20,
+            referenceDate: anchor,
+            label: "Streaming"
+        )
+
+        let application = QualitativeProfileUpdater.apply(
+            result,
+            to: profile,
+            context: context,
+            through: horizon,
+            calendar: calendar
+        )
+
+        let future = application.profile.expenseEvents.filter { $0.date > asOfDate }
+        XCTAssertTrue(application.didChange)
+        XCTAssertEqual(future.count, 2)
+        XCTAssertTrue(future.allSatisfy { !$0.essential && !$0.committed })
+    }
+
+    func testExplicitExpenseDirectiveOverridesTemplateForRecurringSchedule() {
+        let anchor = calendar.date(from: DateComponents(year: 2026, month: 9, day: 1))!
+        let profile = FinancialProfile(
+            currentCash: 1000,
+            asOfDate: asOfDate,
+            expenseEvents: [
+                ExpenseEvent(
+                    amount: 20,
+                    date: anchor,
+                    category: "Streaming",
+                    essential: false,
+                    committed: false
+                )
+            ]
+        )
+        let result = QualitativeParseResult(
+            originalText: "monthly and already committed",
+            directives: [
+                .setExpenseCommitted(true),
+                .setRecurrence(cadence: .monthly, firstDate: nil)
+            ],
+            missingFields: [],
+            matchedRules: ["expense-committed", "expense-recurrence"]
+        )
+        let context = QualitativeNoteContext(
+            subject: .expense,
+            referenceAmount: 20,
+            referenceDate: anchor,
+            label: "Streaming"
+        )
+
+        let application = QualitativeProfileUpdater.apply(
+            result,
+            to: profile,
+            context: context,
+            through: horizon,
+            calendar: calendar
+        )
+
+        let future = application.profile.expenseEvents.filter { $0.date > asOfDate }
+        XCTAssertTrue(application.didChange)
+        XCTAssertEqual(future.count, 2)
+        XCTAssertTrue(future.allSatisfy { !$0.essential && $0.committed })
+    }
+
+    func testRecurringExpensePreservesDifferentAmountWithSameCategory() {
+        let anchor = calendar.date(from: DateComponents(year: 2026, month: 9, day: 1))!
+        let unrelatedDate = calendar.date(from: DateComponents(year: 2026, month: 10, day: 15))!
+        let unrelated = ExpenseEvent(
+            amount: 75,
+            date: unrelatedDate,
+            category: "Streaming",
+            essential: true,
+            committed: true
+        )
+        let profile = FinancialProfile(
+            currentCash: 1000,
+            asOfDate: asOfDate,
+            expenseEvents: [
+                ExpenseEvent(
+                    amount: 20,
+                    date: anchor,
+                    category: "Streaming",
+                    essential: false,
+                    committed: false
+                ),
+                unrelated
+            ]
+        )
+        let result = QualitativeParseResult(
+            originalText: "monthly",
+            directives: [.setRecurrence(cadence: .monthly, firstDate: nil)],
+            missingFields: [],
+            matchedRules: ["expense-recurrence"]
+        )
+        let context = QualitativeNoteContext(
+            subject: .expense,
+            referenceAmount: 20,
+            referenceDate: anchor,
+            label: "Streaming"
+        )
+
+        let application = QualitativeProfileUpdater.apply(
+            result,
+            to: profile,
+            context: context,
+            through: horizon,
+            calendar: calendar
+        )
+
+        let unrelatedAfter = application.profile.expenseEvents.first { $0.id == unrelated.id }
+        let recurring = application.profile.expenseEvents.filter {
+            $0.date > asOfDate && abs($0.amount - 20) <= 0.000_001
+        }
+        XCTAssertTrue(application.didChange)
+        XCTAssertEqual(unrelatedAfter?.date, unrelatedDate)
+        XCTAssertEqual(unrelatedAfter?.amount, 75)
+        XCTAssertEqual(recurring.count, 2)
+    }
+
+    func testReserveDirectiveReplacesExistingRuleOnSameEffectiveDate() {
+        let profile = FinancialProfile(
+            currentCash: 1500,
+            asOfDate: asOfDate,
+            personalReserveSteps: [
+                PersonalReserveStep(
+                    effectiveDate: asOfDate,
+                    minimumCash: 500,
+                    note: "Existing reserve"
+                )
+            ]
+        )
+        let result = QualitativeParseResult(
+            originalText: "keep 700",
+            directives: [.setPersonalReserve(amount: 700, effectiveDate: asOfDate)],
+            missingFields: [],
+            matchedRules: ["personal-reserve"]
+        )
+
+        let application = QualitativeProfileUpdater.apply(
+            result,
+            to: profile,
+            context: QualitativeNoteContext(subject: .general),
+            through: horizon,
+            reserveNote: "Confirmed context",
+            calendar: calendar
+        )
+
+        XCTAssertTrue(application.didChange)
+        XCTAssertEqual(application.profile.personalReserveSteps.count, 1)
+        XCTAssertEqual(application.profile.personalReserveSteps.first?.minimumCash, 700)
+        XCTAssertEqual(
+            FinancialEngine.personalReserve(profile: application.profile, on: asOfDate),
+            700,
+            accuracy: 0.000_001
+        )
+    }
+
+    func testEquivalentReserveOnSameDateIsFinancialNoOp() {
+        let existing = PersonalReserveStep(
+            effectiveDate: asOfDate,
+            minimumCash: 500,
+            note: "Existing reserve"
+        )
+        let profile = FinancialProfile(
+            currentCash: 1500,
+            asOfDate: asOfDate,
+            personalReserveSteps: [existing]
+        )
+        let result = QualitativeParseResult(
+            originalText: "keep 500",
+            directives: [.setPersonalReserve(amount: 500, effectiveDate: asOfDate)],
+            missingFields: [],
+            matchedRules: ["personal-reserve"]
+        )
+
+        let application = QualitativeProfileUpdater.apply(
+            result,
+            to: profile,
+            context: QualitativeNoteContext(subject: .general),
+            through: horizon,
+            reserveNote: "Confirmed context",
+            calendar: calendar
+        )
+
+        XCTAssertFalse(application.didChange)
+        XCTAssertEqual(application.profile.personalReserveSteps.count, 1)
+        XCTAssertEqual(application.profile.personalReserveSteps.first?.id, existing.id)
+        XCTAssertEqual(application.profile.personalReserveSteps.first?.note, "Existing reserve")
+    }
+}
