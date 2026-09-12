@@ -21,6 +21,11 @@ public extension FinancialInsights {
     /// Evaluates a hypothetical purchase and then re-runs every goal with that purchase
     /// inserted into the cash path. This powers UI messages such as:
     /// “F1 is technically possible, but it moves Miami from SAFE to TIGHT.”
+    ///
+    /// A goal is also considered worsened when it remains in the same health band but
+    /// develops a larger funding shortfall. This prevents the UI from saying that a goal
+    /// was unaffected merely because both the before and after states are TIGHT (or both
+    /// are NOT_SAFE).
     static func analyzePurchaseWhatIf(
         profile: FinancialProfile,
         amount: Double,
@@ -74,7 +79,7 @@ public extension FinancialInsights {
                 goal: after.goal,
                 before: before,
                 after: after,
-                worsened: healthRank(after.status) > healthRank(before.status)
+                worsened: goalAssessmentWorsened(from: before, to: after)
             )
         }
 
@@ -83,6 +88,32 @@ public extension FinancialInsights {
             purchaseExplanation: purchase.explanation,
             goalImpacts: impacts
         )
+    }
+
+    private static func goalAssessmentWorsened(
+        from before: GoalPlanAssessment,
+        to after: GoalPlanAssessment
+    ) -> Bool {
+        let beforeRank = healthRank(before.status)
+        let afterRank = healthRank(after.status)
+
+        if afterRank != beforeRank {
+            return afterRank > beforeRank
+        }
+
+        // Dollar values come from deterministic arithmetic, but using a small tolerance
+        // avoids classifying floating-point noise as a real change in the user's plan.
+        let tolerance = 0.005
+
+        if after.shortfallToHardFloor > before.shortfallToHardFloor + tolerance {
+            return true
+        }
+
+        if after.shortfallToRecommendedFloor > before.shortfallToRecommendedFloor + tolerance {
+            return true
+        }
+
+        return false
     }
 
     private static func healthRank(_ status: FinancialHealthStatus) -> Int {

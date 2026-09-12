@@ -45,6 +45,12 @@ struct FinanceCoreDemo {
         print("Transacciones obtenidas: \(result.transactionsFetched)")
         print("Nuevas: \(result.transactionsInserted), actualizadas: \(result.transactionsUpdated)")
         print("Duplicados ignorados: \(result.duplicatesIgnored)")
+        if result.isPartial {
+            print("Aviso: \(result.accountFailures.count) cuenta(s) conservaron sus datos locales por errores de sincronización:")
+            for failure in result.accountFailures {
+                print("- \(failure.externalAccountID): \(failure.error.localizedDescription)")
+            }
+        }
         print("Total local: \(storedAccounts.count) cuentas, \(storedTransactions.count) transacciones")
         print("Datos guardados en: \(repositoryURL.path)")
     }

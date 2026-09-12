@@ -12,6 +12,8 @@ build/
 
 # Swift Package Manager
 .build/
+.build-codex/
+.swift-cache/
 .swiftpm/
 
 # Local bank sandbox configuration

@@ -84,6 +84,63 @@ final class FinanceCoreTests: XCTestCase {
         XCTAssertEqual(stored.first?.transactionDescription, "Corrected")
     }
 
+    func testMultipleAccountsKeepTransactionsIsolatedWhenProviderIDsMatch() async throws {
+        let provider = MultiAccountMockProvider(
+            accounts: [account1, account2],
+            transactionsByAccount: [
+                account1.externalAccountID: [
+                    externalTransaction(id: "purchase:shared", accountID: account1.externalAccountID,
+                                        description: "Checking purchase", amount: 500)
+                ],
+                account2.externalAccountID: [
+                    externalTransaction(id: "purchase:shared", accountID: account2.externalAccountID,
+                                        description: "Savings purchase", amount: 700)
+                ]
+            ]
+        )
+        let repository = InMemoryFinancialRepository()
+        let result = try await BankSyncService(provider: provider, repository: repository).syncAll()
+        let checkingTransactions = try await repository.transactions(
+            accountID: account1.externalAccountID, from: nil, to: nil
+        )
+        let savingsTransactions = try await repository.transactions(
+            accountID: account2.externalAccountID, from: nil, to: nil
+        )
+
+        XCTAssertEqual(result.accountsFetched, 2)
+        XCTAssertEqual(result.transactionsInserted, 2)
+        XCTAssertTrue(result.accountFailures.isEmpty)
+        XCTAssertEqual(checkingTransactions.count, 1)
+        XCTAssertEqual(savingsTransactions.count, 1)
+    }
+
+    func testOneAccountFailureDoesNotDiscardOtherAccountsOrTransactions() async throws {
+        let provider = MultiAccountMockProvider(
+            accounts: [account1, account2],
+            transactionsByAccount: [
+                account1.externalAccountID: [
+                    externalTransaction(id: "purchase:one", accountID: account1.externalAccountID,
+                                        description: "Available transaction", amount: 500)
+                ]
+            ],
+            failingAccountIDs: [account2.externalAccountID]
+        )
+        let repository = InMemoryFinancialRepository()
+        let result = try await BankSyncService(provider: provider, repository: repository).syncAll()
+        let storedAccounts = try await repository.accounts()
+        let storedTransactions = try await repository.transactions(from: nil, to: nil)
+
+        XCTAssertTrue(result.isPartial)
+        XCTAssertEqual(result.accountFailures, [
+            AccountSyncFailure(externalAccountID: account2.externalAccountID,
+                               error: .networkError("Simulated account failure"))
+        ])
+        XCTAssertEqual(result.accountsInserted, 2)
+        XCTAssertEqual(result.transactionsInserted, 1)
+        XCTAssertEqual(storedAccounts.count, 2)
+        XCTAssertEqual(storedTransactions.count, 1)
+    }
+
     func testHTTPErrorBecomesTypedError() async throws {
         let url = try XCTUnwrap(URL(string: "https://example.test"))
         let response = try XCTUnwrap(HTTPURLResponse(url: url,
@@ -141,12 +198,42 @@ final class FinanceCoreTests: XCTestCase {
         return try JSONDecoder().decode(T.self, from: Data(contentsOf: url))
     }
 
-    private func externalTransaction(id: String, description: String, amount: Int64) -> ExternalBankTransaction {
+    private func externalTransaction(id: String, accountID: String = "account-1",
+                                     description: String, amount: Int64) -> ExternalBankTransaction {
         ExternalBankTransaction(provider: .nessie, externalTransactionID: id,
-                                externalAccountID: "account-1", externalCustomerID: "customer-1",
+                                externalAccountID: accountID, externalCustomerID: "customer-1",
                                 transactionDate: Date(timeIntervalSince1970: 1_700_000_000),
                                 description: description, sourceType: .purchase, direction: .outflow,
                                 amountMinorUnits: amount)
+    }
+}
+
+private actor MultiAccountMockProvider: BankingProvider {
+    let accounts: [ExternalBankAccount]
+    let transactionsByAccount: [String: [ExternalBankTransaction]]
+    let failingAccountIDs: Set<String>
+
+    init(accounts: [ExternalBankAccount],
+         transactionsByAccount: [String: [ExternalBankTransaction]],
+         failingAccountIDs: Set<String> = []) {
+        self.accounts = accounts
+        self.transactionsByAccount = transactionsByAccount
+        self.failingAccountIDs = failingAccountIDs
+    }
+
+    func connect() async throws -> BankConnection {
+        BankConnection(id: "connection", provider: .nessie,
+                       externalCustomerID: accounts.first?.externalCustomerID ?? "customer-1",
+                       status: .connecting, connectedAt: Date())
+    }
+
+    func fetchAccounts() async throws -> [ExternalBankAccount] { accounts }
+
+    func fetchTransactions(for account: ExternalBankAccount) async throws -> [ExternalBankTransaction] {
+        if failingAccountIDs.contains(account.externalAccountID) {
+            throw BankingError.networkError("Simulated account failure")
+        }
+        return transactionsByAccount[account.externalAccountID] ?? []
     }
 }
 
