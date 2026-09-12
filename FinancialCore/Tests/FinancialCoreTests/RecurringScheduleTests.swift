@@ -55,6 +55,23 @@ final class RecurringScheduleTests: XCTestCase {
         XCTAssertTrue(events.allSatisfy { !$0.essential })
     }
 
+    func testMonthlyScheduleDoesNotDriftAfterShortMonth() throws {
+        let dates = try FinancialScheduleBuilder.dates(
+            startingOn: date(2026, 1, 31),
+            through: date(2026, 5, 31),
+            cadence: .monthly,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(dates, [
+            date(2026, 1, 31),
+            date(2026, 2, 28),
+            date(2026, 3, 31),
+            date(2026, 4, 30),
+            date(2026, 5, 31)
+        ])
+    }
+
     func testRecurringScheduleRejectsNegativeAmounts() {
         XCTAssertThrowsError(
             try FinancialScheduleBuilder.recurringExpense(

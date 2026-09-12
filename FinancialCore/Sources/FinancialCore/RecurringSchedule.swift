@@ -24,23 +24,31 @@ public enum FinancialScheduleBuilder {
             throw FinancialEngineError.invalidDateRange
         }
 
+        if cadence == .monthly {
+            // Anchor every occurrence to the original day instead of advancing from the
+            // previous (possibly clamped) month. Jan 31 -> Feb 28 -> Mar 31, rather than
+            // drifting permanently to the 28th after February.
+            var result: [Date] = []
+            var monthOffset = 0
+
+            while let occurrence = calendar.date(byAdding: .month, value: monthOffset, to: firstDate),
+                  occurrence <= endDate {
+                result.append(occurrence)
+                monthOffset += 1
+            }
+
+            return result
+        }
+
         var result: [Date] = []
         var current = firstDate
+        let dayStep = cadence == .weekly ? 7 : 14
 
         while current <= endDate {
             result.append(current)
 
-            let next: Date?
-            switch cadence {
-            case .weekly:
-                next = calendar.date(byAdding: .day, value: 7, to: current)
-            case .biweekly:
-                next = calendar.date(byAdding: .day, value: 14, to: current)
-            case .monthly:
-                next = calendar.date(byAdding: .month, value: 1, to: current)
-            }
-
-            guard let next, next > current else {
+            guard let next = calendar.date(byAdding: .day, value: dayStep, to: current),
+                  next > current else {
                 break
             }
             current = next
