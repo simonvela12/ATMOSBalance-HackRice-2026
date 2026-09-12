@@ -54,6 +54,7 @@ struct GoalImpact: Identifiable, Equatable, Sendable {
 struct WhatIfResult: Equatable, Sendable {
     enum Status: String, Sendable {
         case safe = "SAFE"
+        case tradeOff = "TRADE-OFF"
         case wait = "WAIT"
     }
 
