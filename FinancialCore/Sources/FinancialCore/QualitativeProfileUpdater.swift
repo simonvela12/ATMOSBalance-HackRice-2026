@@ -168,11 +168,11 @@ public enum QualitativeProfileUpdater {
         }
 
         if context.subject == .expense,
+           hasSelectedExpense,
            label != nil,
-           let template = matchingExpenseTemplate(
-                in: updated.expenseEvents,
-                context: context
-           ) {
+           let template = updated.expenseEvents.first(where: {
+               matchesSelectedExpense($0, context: context)
+           }) {
             if let recurring = try? QualitativeDirectiveMaterializer.recurringExpenseEvents(
                 from: result,
                 context: context,
@@ -307,18 +307,6 @@ public enum QualitativeProfileUpdater {
         guard let label = context.label, event.source == label else { return false }
         guard let referenceAmount = context.referenceAmount else { return true }
         return abs(event.amount - referenceAmount) <= 0.000_001
-    }
-
-    private static func matchingExpenseTemplate(
-        in events: [ExpenseEvent],
-        context: QualitativeNoteContext
-    ) -> ExpenseEvent? {
-        let matches = events.filter { matchesExpenseSeries($0, context: context) }
-        guard let referenceDate = context.referenceDate else { return matches.first }
-
-        return matches.min { lhs, rhs in
-            abs(lhs.date.timeIntervalSince(referenceDate)) < abs(rhs.date.timeIntervalSince(referenceDate))
-        }
     }
 
     private static func sameIncomeSchedule(_ lhs: [IncomeEvent], _ rhs: [IncomeEvent]) -> Bool {
