@@ -75,11 +75,22 @@ public struct RecurrenceInterval: Codable, Equatable, Sendable {
     }
 }
 
-public enum RecurrenceCadence: Codable, Equatable, Sendable {
+/// Advanced planning cadence kept separate from the existing `RecurrenceCadence`
+/// used by the qualitative parser and legacy schedule builder. This avoids changing
+/// existing Context semantics while allowing V2 to represent custom intervals.
+public enum PlanningRecurrenceCadence: Codable, Equatable, Sendable {
     case weekly
     case biweekly
     case monthly
     case custom(RecurrenceInterval)
+
+    public init(_ cadence: RecurrenceCadence) {
+        switch cadence {
+        case .weekly: self = .weekly
+        case .biweekly: self = .biweekly
+        case .monthly: self = .monthly
+        }
+    }
 
     fileprivate func nextDate(after date: Date, calendar: Calendar) -> Date? {
         switch self {
@@ -103,16 +114,20 @@ public enum RecurrenceCadence: Codable, Equatable, Sendable {
 }
 
 public struct RecurrenceRule: Codable, Equatable, Sendable {
-    public let cadence: RecurrenceCadence
+    public let cadence: PlanningRecurrenceCadence
     public let firstOccurrence: Date
     public let endDate: Date?
     public let isPaused: Bool
 
-    public init(cadence: RecurrenceCadence, firstOccurrence: Date, endDate: Date? = nil, isPaused: Bool = false) {
+    public init(cadence: PlanningRecurrenceCadence, firstOccurrence: Date, endDate: Date? = nil, isPaused: Bool = false) {
         self.cadence = cadence
         self.firstOccurrence = firstOccurrence
         self.endDate = endDate
         self.isPaused = isPaused
+    }
+
+    public init(cadence: RecurrenceCadence, firstOccurrence: Date, endDate: Date? = nil, isPaused: Bool = false) {
+        self.init(cadence: PlanningRecurrenceCadence(cadence), firstOccurrence: firstOccurrence, endDate: endDate, isPaused: isPaused)
     }
 
     public func occurrenceDates(through horizon: Date, calendar: Calendar = .current) -> [Date] {
@@ -153,6 +168,7 @@ public extension IncomeEvent {
     func scenarioNominalAmount(for scenario: FinancialScenario) -> Double {
         amountRange?.amount(for: scenario, direction: .income) ?? max(0, amount)
     }
+
     func scenarioDate(for scenario: FinancialScenario) -> Date {
         dateWindow?.date(for: scenario, direction: .income) ?? date
     }
@@ -162,6 +178,7 @@ public extension ExpenseEvent {
     func scenarioAmount(for scenario: FinancialScenario) -> Double {
         amountRange?.amount(for: scenario, direction: .expense) ?? max(0, amount)
     }
+
     func scenarioDate(for scenario: FinancialScenario) -> Date {
         dateWindow?.date(for: scenario, direction: .expense) ?? date
     }
