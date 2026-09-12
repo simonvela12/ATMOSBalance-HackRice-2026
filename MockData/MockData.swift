@@ -9,8 +9,24 @@ enum MockData {
     )
 
     static let goals: [FinancialGoal] = [
-        FinancialGoal(name: "Miami Trip", targetAmount: 900, targetDate: date(month: 11, day: 14)),
-        FinancialGoal(name: "F1 Ticket", targetAmount: 450, targetDate: date(month: 10, day: 23))
+        FinancialGoal(
+            name: "Miami Trip",
+            targetAmount: 900,
+            currentSaved: 550,
+            targetDate: date(month: 11, day: 14),
+            priority: .high,
+            plannedMonthlyContribution: 200,
+            isProtected: false
+        ),
+        FinancialGoal(
+            name: "F1 Ticket",
+            targetAmount: 450,
+            currentSaved: 300,
+            targetDate: date(month: 10, day: 23),
+            priority: .medium,
+            plannedMonthlyContribution: 150,
+            isProtected: true
+        )
     ]
 
     static let incomeEvents: [IncomeEvent] = [
