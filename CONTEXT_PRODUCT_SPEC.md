@@ -34,7 +34,10 @@ Nothing that changes the plan should be applied silently. The app should interpr
 - Cancelable or avoidable expenses.
 - Essential vs non-essential context.
 - Recurring expenses.
-- Future expenses not yet visible in bank data.
+- Future expenses not yet visible in bank data are explicitly supported.
+- A future expense must capture: **amount, date, must-pay status, flexibility/cancelability, and recurrence**.
+- Future expense recurrence options are: **No / Weekly / Every 2 weeks / Monthly**.
+- Future expenses feed the same plan used by Calendar, Safe to Spend, Plans, and What-If.
 - Reimbursements / shared expenses.
 - Partial reimbursement is confirmed: the user enters the **exact amount expected back** and the **expected repayment date**.
 - The reimbursement amount does not have to equal the original expense.
@@ -84,11 +87,12 @@ Examples:
 - Confirmation preview should show the original expense and the later reimbursement as separate dated cash-flow events
 
 **Future expense**
-- Amount
-- Date
+- Amount — required
+- Date — required
 - Must pay? Yes / No
 - Can reduce or cancel? No / Maybe / Yes
 - Recurrence: No / Weekly / Every 2 weeks / Monthly
+- The confirmation preview must show exactly what will be added to the future cash path before applying it
 
 ## Human-first expense questions
 
@@ -154,6 +158,7 @@ Confidence behavior:
 
 1. Uncertain income confidence uses quick presets plus a custom percentage: **Confirmed 100% / Likely 70% / Possible 30% / Custom %**.
 2. Reimbursements can be partial. The user must explicitly provide the **amount expected back** and **repayment date**; the app never assumes full reimbursement. The original expense and later repayment stay as separate dated events so temporary liquidity risk remains visible.
+3. Future expenses can be created before they appear in bank data. Required inputs are **amount, date, whether the user must pay it, whether it can be reduced/canceled, and whether it recurs**. Recurrence choices are **No / Weekly / Every 2 weeks / Monthly**. Confirmed future expenses immediately affect the shared financial plan.
 
 ## Open decisions
 
