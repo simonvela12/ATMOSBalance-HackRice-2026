@@ -30,6 +30,7 @@ public struct FinancialDashboardSnapshot: Sendable {
     public let asOfDate: Date
     public let planningHorizon: Date
     public let currentStatus: FinancialHealthStatus
+    public let horizonStatus: FinancialHealthStatus
     public let safeToSpendNow: Double
     public let typicalWeeklySpending: Double
     public let additionalWeeklyCapacity: Double
@@ -45,6 +46,16 @@ public enum FinancialInsights {
             return .notSafe
         }
         if forecast.recommendedHeadroom < 0 {
+            return .tight
+        }
+        return .safe
+    }
+
+    public static func healthStatus(for horizon: HorizonHeadroom) -> FinancialHealthStatus {
+        if horizon.minimumHardHeadroom < 0 {
+            return .notSafe
+        }
+        if horizon.minimumRecommendedHeadroom < 0 {
             return .tight
         }
         return .safe
@@ -193,6 +204,7 @@ public enum FinancialInsights {
             asOfDate: profile.asOfDate,
             planningHorizon: planningHorizon,
             currentStatus: healthStatus(for: currentForecast),
+            horizonStatus: healthStatus(for: horizon),
             safeToSpendNow: safeNow,
             typicalWeeklySpending: weekly.typicalWeeklySpending,
             additionalWeeklyCapacity: weekly.additionalWeeklyCapacity,
