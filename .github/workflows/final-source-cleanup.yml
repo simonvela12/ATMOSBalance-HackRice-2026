@@ -1,0 +1,62 @@
+name: Final Source Cleanup
+
+on:
+  push:
+    branches:
+      - product-v1.4-clean-integration
+    paths:
+      - .github/workflows/final-source-cleanup.yml
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout integration branch
+        uses: actions/checkout@v5
+        with:
+          ref: product-v1.4-clean-integration
+          fetch-depth: 0
+
+      - name: Remove demo terminology from production forecast
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("Finanzas2026/Finanzas2026/ContentView.swift")
+          text = path.read_text()
+
+          replacements = {
+              "Entries update this demo forecast immediately.":
+                  "Entries update your forecast immediately.",
+              "These numbers update when activity, goals, or adjustments change in the mock forecast.":
+                  "These numbers update when activity, goals, or confirmed adjustments change.",
+              "This breakdown uses demonstration data to preview upcoming income and obligations, with goal funding separated so you can see how much room is left.":
+                  "This breakdown reflects linked-account activity and confirmed planning entries, with income, obligations, and goal funding separated for clarity.",
+              "MockForecast": "ForecastModel",
+              "mockAmount": "baseAmount",
+          }
+
+          missing = [old for old in replacements if old not in text]
+          if missing:
+              raise SystemExit("Missing expected cleanup anchors: " + repr(missing))
+
+          for old, new in replacements.items():
+              text = text.replace(old, new)
+
+          path.write_text(text)
+
+      - name: Commit cleanup
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "No cleanup changes needed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Finanzas2026/Finanzas2026/ContentView.swift
+          git commit -m "Remove demo terminology from production forecast"
+          git push origin HEAD:product-v1.4-clean-integration
