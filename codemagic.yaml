@@ -38,3 +38,57 @@ workflows:
           ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$CM_BUILD_DIR/Test-iOS-Simulator.zip"
     artifacts:
       - Test-iOS-Simulator.zip
+
+  ios-simulator-appetize-publish:
+    name: iOS Simulator + publish to Appetize
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    environment:
+      groups:
+        - appetize_credentials
+      xcode: latest
+    scripts:
+      - name: Test FinanceCore
+        script: |
+          set -euo pipefail
+          swift test -Xswiftc -warnings-as-errors
+      - name: Test FinancialCore
+        script: |
+          set -euo pipefail
+          cd FinancialCore
+          swift test -Xswiftc -warnings-as-errors
+      - name: Build iOS Simulator app
+        script: |
+          set -euo pipefail
+          xcodebuild \
+            -project Finanzas2026/Finanzas2026.xcodeproj \
+            -scheme Finanzas2026 \
+            -configuration Release \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$CM_BUILD_DIR/build/ios-simulator" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+      - name: Package app for Appetize
+        script: |
+          set -euo pipefail
+          APP_PATH=$(find "$CM_BUILD_DIR/build/ios-simulator/Build/Products/Release-iphonesimulator" -maxdepth 1 -name '*.app' -type d -print -quit)
+          if [ -z "$APP_PATH" ]; then
+            echo "Simulator .app was not produced"
+            exit 1
+          fi
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$CM_BUILD_DIR/Test-iOS-Simulator.zip"
+    artifacts:
+      - Test-iOS-Simulator.zip
+    publishing:
+      scripts:
+        - name: Publish Simulator app to Appetize
+          script: |
+            set -euo pipefail
+            test -n "$APPETIZE_API_TOKEN"
+            test -n "$APPETIZE_APP_PUBLIC_KEY"
+            curl --fail-with-body --location \
+              --user "$APPETIZE_API_TOKEN:" \
+              --request POST \
+              "https://api.appetize.io/v1/apps/$APPETIZE_APP_PUBLIC_KEY" \
+              --form "file=@$CM_BUILD_DIR/Test-iOS-Simulator.zip"

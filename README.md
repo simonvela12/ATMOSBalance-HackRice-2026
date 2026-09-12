@@ -1,6 +1,6 @@
-# Hackathon2026 — Product V1.2
+# Hackathon2026 — Unified Product V1.4
 
-`product-v1.2` is the integrated product branch for the iPhone demo.
+`product-v1.4-clean-integration-unified` is the integrated product branch for the iPhone demo. It keeps `product-v1.4-clean-integration` unchanged while bringing the remaining branch histories and non-superseded features into one app.
 
 ## Product
 
@@ -41,6 +41,6 @@ The V1.2 workflow validates all three integration layers on macOS:
 
 ## Xcode / iPhone
 
-Checkout `product-v1.2`, open `Finanzas2026/Finanzas2026.xcodeproj`, select the `Finanzas2026` scheme and an attached iPhone, choose the appropriate Development Team if Xcode asks, and Run. No API key is committed in this branch; Nessie credentials are entered at runtime through the connection flow.
+Checkout `product-v1.4-clean-integration-unified`, open `Finanzas2026/Finanzas2026.xcodeproj`, select the `Finanzas2026` scheme and an attached iPhone, choose the appropriate Development Team if Xcode asks, and Run. No API key is committed in this branch; Nessie credentials are entered at runtime through the connection flow.
 
 See `PRODUCT_V1_2_HANDOFF.md` for the integration decisions and branch map.

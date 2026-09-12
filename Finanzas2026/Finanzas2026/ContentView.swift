@@ -1926,6 +1926,7 @@ private struct AccountsSheet: View {
                 return "Updated, but one account could not be read in full. Its history may be incomplete."
             }
             return "Up to date."
+        case .cached: return "Showing saved bank data. Refresh to check for updates."
         case .idle: return "Nothing linked yet."
         }
     }

@@ -49,6 +49,10 @@ final class BankAccountStore: ObservableObject {
     var canRefresh: Bool { !syncServices.isEmpty }
     var importedTransferCount: Int { transactions.lazy.filter(\.isTransfer).count }
 
+    /// The sync completed, but at least one linked account returned incomplete
+    /// history. Keep the cached data visible while making that limitation clear.
+    var hasPartialSync: Bool { lastSyncResult?.isPartial == true }
+
     var totalAvailableCash: Double {
         Double(
             accounts
