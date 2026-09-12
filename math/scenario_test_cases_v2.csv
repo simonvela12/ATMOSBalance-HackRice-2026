@@ -1,0 +1,4 @@
+case,scenario,current_cash,personal_reserve,safety_buffer,irregular_income_amount,irregular_income_confidence,irregular_income_counted,purchase_amount,hard_headroom_before,recommended_headroom_before,hard_headroom_after,recommended_headroom_after,expected_status,notes
+side_income_purchase,CONSERVATIVE,1000,500,100,300,0.30,0,550,500,400,-50,-150,NOT_SAFE,"Does not rely on irregular income"
+side_income_purchase,EXPECTED,1000,500,100,300,0.30,90,550,590,490,40,-60,TIGHT,"Uses amount x confidence"
+side_income_purchase,OPTIMISTIC,1000,500,100,300,0.30,300,550,800,700,250,150,SAFE,"Assumes explicitly entered irregular income arrives in full"

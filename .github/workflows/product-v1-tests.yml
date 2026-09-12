@@ -1,0 +1,35 @@
+name: Product V1 Tests
+
+on:
+  push:
+    branches:
+      - product-v1-cleanup
+      - product-v1-cleanup-v2
+      - product-v1.2
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Test banking FinanceCore
+        run: swift test
+
+      - name: Test FinancialCore engine
+        run: swift test --package-path FinancialCore
+
+      - name: Build iOS product shell
+        run: |
+          xcodebuild \
+            -project Finanzas2026/Finanzas2026.xcodeproj \
+            -scheme Finanzas2026 \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            build
