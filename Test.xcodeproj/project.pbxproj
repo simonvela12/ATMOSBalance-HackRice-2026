@@ -45,6 +45,21 @@
 			path = TestUITests;
 			sourceTree = "<group>";
 		};
+		2E38F15C3054FF2F007AC1E5 /* Models */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Models;
+			sourceTree = "<group>";
+		};
+		2E38F15D3054FF2F007AC1E5 /* MockData */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = MockData;
+			sourceTree = "<group>";
+		};
+		2E38F15E3054FF2F007AC1E5 /* Views */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Views;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -75,6 +90,9 @@
 		2E38F11C3054F8D2007AC1E5 = {
 			isa = PBXGroup;
 			children = (
+				2E38F15C3054FF2F007AC1E5 /* Models */,
+				2E38F15D3054FF2F007AC1E5 /* MockData */,
+				2E38F15E3054FF2F007AC1E5 /* Views */,
 				2E38F1273054F8D3007AC1E5 /* Test */,
 				2E38F1373054F8D5007AC1E5 /* TestTests */,
 				2E38F1413054F8D5007AC1E5 /* TestUITests */,
@@ -109,6 +127,9 @@
 			);
 			fileSystemSynchronizedGroups = (
 				2E38F1273054F8D3007AC1E5 /* Test */,
+				2E38F15C3054FF2F007AC1E5 /* Models */,
+				2E38F15D3054FF2F007AC1E5 /* MockData */,
+				2E38F15E3054FF2F007AC1E5 /* Views */,
 			);
 			name = Test;
 			packageProductDependencies = (
