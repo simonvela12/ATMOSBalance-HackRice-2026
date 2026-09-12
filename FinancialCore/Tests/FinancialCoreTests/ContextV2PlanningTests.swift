@@ -139,7 +139,7 @@ final class ContextV2PlanningTests: XCTestCase {
             .autoApply
         )
         XCTAssertEqual(
-            MaterialityPolicy.recurrringAmountDecision(
+            MaterialityPolicy.recurringAmountDecision(
                 expectedAmount: 20,
                 actualAmount: 22,
                 sameMerchant: true,
@@ -149,7 +149,7 @@ final class ContextV2PlanningTests: XCTestCase {
             .askUser
         )
         XCTAssertEqual(
-            MaterialityPolicy.recurrringAmountDecision(
+            MaterialityPolicy.recurringAmountDecision(
                 expectedAmount: 20,
                 actualAmount: 35,
                 sameMerchant: true,
