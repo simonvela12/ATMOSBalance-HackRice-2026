@@ -116,6 +116,15 @@ Examples the model must support:
 - If the user rejects the match, both items remain separate.
 - Candidate matching may use explainable signals such as amount similarity, date proximity, merchant/payee, category, and event label, but these signals only create a suggestion, never an automatic financial change.
 
+### Recurring merchant amount updates
+
+- A real transaction may suggest that the expected amount of a recurring expense has changed, but only when the transaction is clearly identified as the **same merchant/service** as the recurring expense.
+- Example: if the user has `Netflix — $20/month` and a linked transaction clearly identified as Netflix posts for `$22`, the app may ask: **“Netflix charged $22 instead of $20. Update future expected amount to $22?”**
+- A similar amount by itself is not enough. Broad category similarity such as “Entertainment” is not enough.
+- Matching should rely on explainable identity signals such as normalized merchant/payee identity, transaction description, a previously confirmed merchant mapping, and normal date/cadence proximity.
+- If merchant/service identity is ambiguous, the app should not suggest changing the recurring amount.
+- Even with a strong merchant match, the recurring rule is never modified silently; the user must confirm the update.
+
 ### Goals
 
 - Goal amount and target date.
@@ -257,6 +266,7 @@ Confidence behavior:
 - Earmarked funds are never silently released; when their purpose disappears, the user must explicitly choose whether to make them general, reassign them, or keep them reserved.
 - Planned events and actual bank transactions must never be double-counted after the user confirms they represent the same real-world event.
 - Possible event matches may be suggested automatically, but completion/linking always requires explicit confirmation.
+- Recurring amount-update suggestions require a strong same-merchant/service match and always require user confirmation.
 
 ## Confirmed decisions
 
@@ -273,6 +283,7 @@ Confidence behavior:
 11. Variable expenses may use an optional **minimum / expected / maximum** range. Scenario mapping is inverted versus income: **Conservative = maximum expense, Expected = expected expense, Optimistic = minimum expense**.
 12. Future income, expenses, and reimbursements may use an optional **Earliest / Expected / Latest** date window when timing is uncertain. Scenario timing is deterministic: for income, Conservative = latest and Optimistic = earliest; for expenses, Conservative = earliest and Optimistic = latest; Expected uses the expected date in both cases.
 13. When a real bank transaction appears to match a previously planned event, the app suggests the match and asks the user to confirm. Only after confirmation are the two linked and the planned event marked completed so it is not counted twice.
+14. A real transaction may trigger a recurring-expense amount update suggestion only when it is clearly the **same merchant/service** as the recurring rule. Amount/category similarity alone is insufficient, ambiguous matches do nothing, and the recurring amount changes only after explicit user confirmation.
 
 ## Open decisions
 
