@@ -2,8 +2,9 @@ import SwiftUI
 
 struct WhatIfView: View {
     let summary: FinancialSummary
+    let goals: [FinancialGoal]
 
-    @State private var question = "Can I buy F1 tickets for $450 next month?"
+    @State private var question = "Can I buy a new PC for $1500 now?"
     @State private var parsedScenario: WhatIfScenario?
     @State private var result: WhatIfResult?
     @State private var isAnalyzing = false
@@ -32,7 +33,7 @@ struct WhatIfView: View {
                     }
                     .disabled(question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isAnalyzing)
 
-                    Text("If GEMINI_API_KEY is configured in Xcode, Gemini parses the question. Otherwise the app automatically uses an offline parser.")
+                    Text("Gemini extracts the scenario when configured; the financial logic stays local. If the API fails, the app falls back to the offline parser.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -44,6 +45,7 @@ struct WhatIfView: View {
                     LabeledContent("Protected cash") {
                         Text(summary.protectedCash, format: .currency(code: "USD").precision(.fractionLength(0)))
                     }
+                    LabeledContent("Savings goals", value: "\(goals.count)")
                 }
 
                 if let scenario = parsedScenario {
@@ -66,8 +68,8 @@ struct WhatIfView: View {
                 if let result {
                     Section("Result") {
                         HStack(spacing: 8) {
-                            Image(systemName: result.status == .safe ? "checkmark.circle.fill" : "clock.fill")
-                                .foregroundStyle(result.status == .safe ? .green : .orange)
+                            Image(systemName: statusIcon(result.status))
+                                .foregroundStyle(statusColor(result.status))
                             Text(result.status.rawValue)
                                 .font(.headline)
                         }
@@ -76,7 +78,7 @@ struct WhatIfView: View {
                             Text(result.safeToSpendBeforePurchase, format: .currency(code: "USD").precision(.fractionLength(0)))
                         }
 
-                        LabeledContent("Remaining after purchase") {
+                        LabeledContent("Remaining safe cash") {
                             Text(result.remainingAfterPurchase, format: .currency(code: "USD").precision(.fractionLength(0)))
                                 .foregroundStyle(result.remainingAfterPurchase >= 0 ? .primary : .red)
                         }
@@ -89,6 +91,40 @@ struct WhatIfView: View {
 
                         Text(result.explanation)
                             .foregroundStyle(.secondary)
+                    }
+
+                    if !result.goalImpacts.isEmpty {
+                        Section("Goal impact") {
+                            ForEach(result.goalImpacts) { impact in
+                                VStack(alignment: .leading, spacing: 6) {
+                                    HStack {
+                                        Image(systemName: impactIcon(impact.impactLevel))
+                                            .foregroundStyle(impactColor(impact.impactLevel))
+                                        Text(impact.goalName)
+                                            .fontWeight(.semibold)
+                                        Spacer()
+                                        Text(impactLabel(impact))
+                                            .font(.caption)
+                                            .foregroundStyle(impactColor(impact.impactLevel))
+                                    }
+
+                                    if impact.delayDays > 0 {
+                                        HStack {
+                                            Text(impact.originalTargetDate, format: .dateTime.month(.abbreviated).day())
+                                            Image(systemName: "arrow.right")
+                                            Text(impact.projectedTargetDate, format: .dateTime.month(.abbreviated).day())
+                                        }
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    }
+
+                                    Text(impact.explanation)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.vertical, 3)
+                            }
+                        }
                     }
                 }
 
@@ -112,11 +148,12 @@ struct WhatIfView: View {
         let input = question
         let parser = parser
         let summary = summary
+        let goals = goals
 
         Task {
             do {
                 let scenario = try await parser.parseScenario(from: input)
-                let evaluation = WhatIfEvaluator(summary: summary).evaluate(scenario)
+                let evaluation = WhatIfEvaluator(summary: summary, goals: goals).evaluate(scenario)
 
                 await MainActor.run {
                     parsedScenario = scenario
@@ -129,6 +166,50 @@ struct WhatIfView: View {
                     isAnalyzing = false
                 }
             }
+        }
+    }
+
+    private func statusIcon(_ status: WhatIfResult.Status) -> String {
+        switch status {
+        case .safe: return "checkmark.circle.fill"
+        case .tradeOff: return "arrow.triangle.branch"
+        case .wait: return "clock.fill"
+        }
+    }
+
+    private func statusColor(_ status: WhatIfResult.Status) -> Color {
+        switch status {
+        case .safe: return .green
+        case .tradeOff: return .orange
+        case .wait: return .red
+        }
+    }
+
+    private func impactIcon(_ level: GoalImpact.ImpactLevel) -> String {
+        switch level {
+        case .unaffected: return "checkmark.circle"
+        case .delayed: return "calendar.badge.clock"
+        case .atRisk: return "exclamationmark.triangle"
+        }
+    }
+
+    private func impactColor(_ level: GoalImpact.ImpactLevel) -> Color {
+        switch level {
+        case .unaffected: return .green
+        case .delayed: return .orange
+        case .atRisk: return .red
+        }
+    }
+
+    private func impactLabel(_ impact: GoalImpact) -> String {
+        switch impact.impactLevel {
+        case .unaffected:
+            return "On track"
+        case .delayed:
+            let months = max(1, Int(ceil(Double(impact.delayDays) / 30.0)))
+            return "+\(months) mo"
+        case .atRisk:
+            return "At risk"
         }
     }
 }
