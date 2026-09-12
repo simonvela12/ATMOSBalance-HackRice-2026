@@ -22,13 +22,6 @@ let forecast = try FinancialEngine.forecast(
     targetDate: targetDate
 )
 
-let purchase = try FinancialEngine.assessPurchase(
-    profile: profile,
-    amount: 450,
-    purchaseDate: purchaseDate,
-    planningHorizon: horizon
-)
-
 let dashboard = try FinancialInsights.dashboard(
     profile: profile,
     through: horizon
@@ -46,6 +39,18 @@ let explainedPurchase = try FinancialInsights.assessAndExplainPurchase(
     purchaseDate: purchaseDate,
     planningHorizon: horizon
 )
+
+let goals = try FinancialInsights.assessAllGoals(
+    profile: profile,
+    planningHorizon: horizon
+)
+
+let whatIf = try FinancialInsights.analyzePurchaseWhatIf(
+    profile: profile,
+    amount: 450,
+    purchaseDate: purchaseDate,
+    planningHorizon: horizon
+)
 ```
 
 ## Core outputs
@@ -58,7 +63,8 @@ let explainedPurchase = try FinancialInsights.assessAndExplainPurchase(
 - tightest future date
 - shortfall to hard/recommended floors
 - earliest fully safe purchase date
-- flexible-goal assessment
+- mandatory/flexible goal health
+- goal-aware purchase trade-offs (for example, a purchase moving a goal from SAFE to TIGHT)
 - CONSERVATIVE / EXPECTED / OPTIMISTIC deterministic scenarios
 - daily cash-flow points for a SwiftUI calendar/chart
 - recommended weekly spending limit
@@ -115,6 +121,21 @@ Reason codes currently include:
 
 The UI can turn those deterministic outputs into plain-language copy. The math engine does not ask an LLM to invent affordability reasoning.
 
+## Goal planning and What-If trade-offs
+
+`FinancialInsights.assessAllGoals(...)` evaluates every goal using the same liquidity model as the rest of the engine.
+
+- mandatory goals are already included in the baseline and report whether the cash path can support them;
+- flexible goals are evaluated as explicit What-If decisions;
+- overdue unpaid mandatory goals remain immediately due;
+- overdue flexible goals are assessed as decisions the user can make today.
+
+`FinancialInsights.analyzePurchaseWhatIf(...)` inserts a hypothetical purchase into a copy of the profile, re-runs every goal, and reports which goals worsen. This is designed for product copy such as:
+
+> F1 is technically possible, but it moves Miami from SAFE to TIGHT.
+
+The comparison is deterministic and based on the same cash-path rules as the purchase assessment.
+
 ## Current MVP assumptions
 
 - past transactions are already reflected in current cash
@@ -139,10 +160,10 @@ Long-term commitments can still be represented through reserve schedules and dat
 
 The package is continuously validated by GitHub Actions on macOS.
 
-Latest validated milestone after adding dashboard/timeline/purchase-explanation behavior:
+Latest validated milestone after adding dashboard, timeline, purchase explanations, adaptive goal health, and goal-aware What-If analysis:
 
 - Apple Swift 6.3.3 on macOS runner
-- `25` XCTest tests
+- `31` XCTest tests
 - `0` failures
 - `FinancialCoreDemo` builds and runs successfully
 
