@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import FinancialCore
 
@@ -32,80 +33,97 @@ private struct ProtectedFundsRootView: View {
 private struct ProtectedFundsBanner: View {
     @EnvironmentObject private var bankStore: BankAccountStore
     @State private var summary = ProtectedFundsSummary.empty
+    @State private var showingDetails = false
 
     private static let money = FloatingPointFormatStyle<Double>.Currency(code: "USD")
         .precision(.fractionLength(0))
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 14) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("AVAILABLE TO SPEND")
-                        .font(.caption2.weight(.bold))
-                        .tracking(1.1)
-                        .foregroundStyle(.white.opacity(0.58))
-                    Text(Self.money.format(summary.available))
-                        .font(.system(size: 30, weight: .semibold, design: .rounded))
-                        .monospacedDigit()
-                        .contentTransition(.numericText(value: summary.available))
-                    Text("of \(Self.money.format(summary.balance)) current balance")
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.50))
-                }
-
-                Spacer(minLength: 8)
-
-                VStack(alignment: .trailing, spacing: 4) {
-                    HStack(spacing: 5) {
-                        Image(systemName: "lock.fill")
+        Button {
+            showingDetails = true
+        } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("AVAILABLE TO SPEND")
                             .font(.caption2.weight(.bold))
-                        Text("\(Self.money.format(summary.protected)) protected")
-                            .font(.subheadline.weight(.semibold))
+                            .tracking(1.1)
+                            .foregroundStyle(.white.opacity(0.58))
+                        Text(Self.money.format(summary.available))
+                            .font(.system(size: 30, weight: .semibold, design: .rounded))
                             .monospacedDigit()
+                            .contentTransition(.numericText(value: summary.available))
+                        Text("of \(Self.money.format(summary.balance)) current balance")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.50))
                     }
-                    .foregroundStyle(Color(red: 1.00, green: 0.82, blue: 0.24))
 
-                    Text(summary.reasonLine)
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.64))
-                        .multilineTextAlignment(.trailing)
-                        .lineLimit(2)
+                    Spacer(minLength: 8)
+
+                    VStack(alignment: .trailing, spacing: 4) {
+                        HStack(spacing: 5) {
+                            Image(systemName: "lock.fill")
+                                .font(.caption2.weight(.bold))
+                            Text("\(Self.money.format(summary.protected)) protected")
+                                .font(.subheadline.weight(.semibold))
+                                .monospacedDigit()
+                        }
+                        .foregroundStyle(Color(red: 1.00, green: 0.82, blue: 0.24))
+
+                        HStack(spacing: 5) {
+                            Text(summary.reasonLine)
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.64))
+                                .multilineTextAlignment(.trailing)
+                                .lineLimit(2)
+                            Image(systemName: "chevron.right")
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(.white.opacity(0.35))
+                        }
+                    }
+                    .frame(maxWidth: 200, alignment: .trailing)
                 }
-                .frame(maxWidth: 190, alignment: .trailing)
-            }
 
-            if summary.protected > summary.balance + 0.005 {
-                Label(
-                    "Protected commitments exceed the current balance by \(Self.money.format(summary.protected - summary.balance)).",
-                    systemImage: "exclamationmark.triangle.fill"
+                if summary.protected > summary.balance + 0.005 {
+                    Label(
+                        "Protected commitments exceed the current balance by \(Self.money.format(summary.protected - summary.balance)).",
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(Color(red: 1.00, green: 0.82, blue: 0.24))
+                }
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 10)
+            .background(
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.025, green: 0.075, blue: 0.13),
+                        Color(red: 0.04, green: 0.13, blue: 0.19)
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
                 )
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(Color(red: 1.00, green: 0.82, blue: 0.24))
+            )
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(.white.opacity(0.10))
+                    .frame(height: 0.5)
             }
         }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 18)
-        .padding(.vertical, 10)
-        .background(
-            LinearGradient(
-                colors: [
-                    Color(red: 0.025, green: 0.075, blue: 0.13),
-                    Color(red: 0.04, green: 0.13, blue: 0.19)
-                ],
-                startPoint: .leading,
-                endPoint: .trailing
-            )
-        )
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(.white.opacity(0.10))
-                .frame(height: 0.5)
-        }
+        .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
             "\(Self.money.format(summary.available)) available to spend. " +
             "\(Self.money.format(summary.protected)) protected. \(summary.reasonLine)"
         )
+        .accessibilityHint("Opens the protected money breakdown")
+        .sheet(isPresented: $showingDetails) {
+            ProtectedFundsDetailSheet(summary: summary)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
         .task {
             while !Task.isCancelled {
                 refresh()
@@ -195,6 +213,158 @@ private struct ProtectedFundsBanner: View {
         if newSummary != summary {
             summary = newSummary
         }
+    }
+}
+
+private struct ProtectedFundsDetailSheet: View {
+    let summary: ProtectedFundsSummary
+
+    private static let money = FloatingPointFormatStyle<Double>.Currency(code: "USD")
+        .precision(.fractionLength(0))
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color(red: 0.025, green: 0.075, blue: 0.13),
+                    Color(red: 0.05, green: 0.17, blue: 0.24),
+                    Color(red: 0.02, green: 0.05, blue: 0.09)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("PROTECTED MONEY")
+                            .font(.caption.weight(.bold))
+                            .tracking(1.2)
+                            .foregroundStyle(.white.opacity(0.58))
+                        Text("What you can actually spend")
+                            .font(.title2.weight(.bold))
+                        Text("Your bank balance stays visible, but goals and purchases are evaluated after this protected money is removed.")
+                            .font(.subheadline)
+                            .foregroundStyle(.white.opacity(0.60))
+                    }
+
+                    HStack(spacing: 12) {
+                        ProtectedMetric(
+                            title: "AVAILABLE",
+                            value: Self.money.format(summary.available),
+                            symbol: "banknote.fill"
+                        )
+                        ProtectedMetric(
+                            title: "PROTECTED",
+                            value: Self.money.format(summary.protected),
+                            symbol: "lock.fill"
+                        )
+                    }
+
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("WHY IT'S PROTECTED")
+                            .font(.caption.weight(.bold))
+                            .tracking(1.0)
+                            .foregroundStyle(.white.opacity(0.55))
+                            .padding(.bottom, 8)
+
+                        if summary.commitments.isEmpty && summary.reserveProtected <= 0.005 {
+                            Text("Nothing is protected yet. Mark a goal as Must happen when its money should stop being treated as spendable.")
+                                .font(.subheadline)
+                                .foregroundStyle(.white.opacity(0.65))
+                                .padding(.vertical, 14)
+                        } else {
+                            ForEach(Array(summary.commitments.enumerated()), id: \.element.id) { index, item in
+                                ProtectedCommitmentRow(item: item)
+                                if index < summary.commitments.count - 1 || summary.reserveProtected > 0.005 {
+                                    Divider().overlay(.white.opacity(0.10))
+                                }
+                            }
+
+                            if summary.reserveProtected > 0.005 {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "shield.fill")
+                                        .frame(width: 32, height: 32)
+                                        .background(.white.opacity(0.08), in: Circle())
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Cash reserve")
+                                            .font(.subheadline.weight(.semibold))
+                                        Text("Keep untouched")
+                                            .font(.caption)
+                                            .foregroundStyle(.white.opacity(0.52))
+                                    }
+                                    Spacer()
+                                    Text(Self.money.format(summary.reserveProtected))
+                                        .font(.subheadline.weight(.bold))
+                                        .monospacedDigit()
+                                }
+                                .padding(.vertical, 12)
+                            }
+                        }
+                    }
+                    .padding(16)
+                    .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+
+                    Text("Rule: total balance − protected money = available to spend. Must-happen goals are protected immediately and stay out of purchase affordability until their deadline or completion.")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.52))
+                        .lineSpacing(2)
+                }
+                .foregroundStyle(.white)
+                .padding(20)
+                .padding(.bottom, 24)
+            }
+            .scrollIndicators(.hidden)
+        }
+        .preferredColorScheme(.dark)
+    }
+}
+
+private struct ProtectedMetric: View {
+    let title: String
+    let value: String
+    let symbol: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(title, systemImage: symbol)
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.white.opacity(0.55))
+            Text(value)
+                .font(.title2.weight(.bold))
+                .monospacedDigit()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+    }
+}
+
+private struct ProtectedCommitmentRow: View {
+    let item: ProtectedCommitment
+
+    private static let money = FloatingPointFormatStyle<Double>.Currency(code: "USD")
+        .precision(.fractionLength(0))
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "target")
+                .frame(width: 32, height: 32)
+                .background(.white.opacity(0.08), in: Circle())
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.name)
+                    .font(.subheadline.weight(.semibold))
+                Text("Needed " + item.deadline.formatted(.dateTime.month(.abbreviated).day().year()))
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.52))
+            }
+            Spacer()
+            Text(Self.money.format(item.amount))
+                .font(.subheadline.weight(.bold))
+                .monospacedDigit()
+        }
+        .padding(.vertical, 12)
     }
 }
 
