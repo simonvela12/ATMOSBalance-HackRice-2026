@@ -1,46 +1,59 @@
-# Hackathon2026 — Product V1.2
+# Hackathon2026 — current product
 
-`product-v1.2` is the integrated product branch for the iPhone demo.
+**Canonical product branch:** `product-v1.4-clean-integration`
 
-## Product
+Use this branch for the integrated iPhone app. Older Lucas/OpenAI experiment branches are obsolete; they should not be used as a source of truth.
 
-The app is a college-student money-planning tool for irregular income. Linked-bank data provides current cash and transaction history; qualitative Context adds user-confirmed meaning; `FinancialCore` then produces deterministic, explainable planning outputs including safe-to-spend, future cash health, goals, calendar risk, and purchase What-If.
+## What the app does
 
-## Architecture
+This is a visual financial-planning app for students with irregular income. It combines linked-account data with user-entered plans and qualitative context to show:
 
-```text
-Nessie / Demo provider
-        ↓
-FinanceCore
-(sync, normalization, persistence, multi-account handling)
-        ↓
-BankAccountStore / iOS adapter
-        ↓
-user-confirmed Context
-        ↓
-FinancialCore
-(deterministic cash path, reserves, goals, What-If)
-        ↓
-SwiftUI product shell
-(Home / Calendar / Plans / What-If / Context)
-```
+- current cash from linked accounts
+- forecasted financial weather and cash path
+- editable future income and expenses
+- goals with priority/flexibility and progress guidance
+- personal cash reserve
+- purchase What-If analysis
+- confirm-first Context for information the bank cannot infer
 
-`FinanceCore` owns bank-provider concerns. `FinancialCore` owns planning semantics and must remain provider-independent. The SwiftUI shell should not duplicate either layer's formulas.
+Bank facts come from `FinanceCore`. Planning, goals, Context semantics and deterministic financial calculations live in `FinancialCore`. The SwiftUI app consumes those shared engines rather than reimplementing the math in the UI.
 
-## Qualitative transaction context
+## Run on iPhone
 
-V1.2 incorporates the useful parts of the qualitative tagging work: spending category, need level, expense flexibility, planning status, frequency, user priority, income source kind, and explicit confidence bands. Deterministic merchant/category suggestions are confirmation defaults only; they never silently change the plan. The earlier opaque cut-priority score is intentionally not used by the product engine.
+1. Checkout `product-v1.4-clean-integration`.
+2. Open `Finanzas2026/Finanzas2026.xcodeproj`.
+3. Select scheme `Finanzas2026`.
+4. Select the connected iPhone and choose a Development Team if Xcode asks.
+5. Run the app.
+6. Use the profile/account connection flow to enter the Nessie access key and customer ID at runtime.
+
+No bank credential is committed to GitHub.
 
 ## Validation
 
-The V1.2 workflow validates all three integration layers on macOS:
+The canonical branch runs one workflow, **Product Validation**, which must pass all three checks:
 
-1. `swift test` — banking `FinanceCore`, including Nessie integration coverage.
-2. `swift test --package-path FinancialCore` — planning engine and Context semantics.
-3. `xcodebuild` for `Finanzas2026/Finanzas2026.xcodeproj` — the actual iOS product shell.
+```bash
+swift test
+swift test --package-path FinancialCore
+xcodebuild \
+  -project Finanzas2026/Finanzas2026.xcodeproj \
+  -scheme Finanzas2026 \
+  -sdk iphonesimulator \
+  -destination 'generic/platform=iOS Simulator' \
+  CODE_SIGNING_ALLOWED=NO \
+  build
+```
 
-## Xcode / iPhone
+## Repository map
 
-Checkout `product-v1.2`, open `Finanzas2026/Finanzas2026.xcodeproj`, select the `Finanzas2026` scheme and an attached iPhone, choose the appropriate Development Team if Xcode asks, and Run. No API key is committed in this branch; Nessie credentials are entered at runtime through the connection flow.
+- `Finanzas2026/` — iOS app and Xcode project
+- `Sources/FinanceCore/` — bank/Nessie sync, normalization and persistence
+- `FinancialCore/` — deterministic planning, goals, Context and What-If engine
+- `Tests/` and `FinancialCore/Tests/` — banking and planning tests
+- `SETUP.md` — setup details
+- `ARCHITECTURE.md` — current architecture
 
-See `PRODUCT_V1_2_HANDOFF.md` for the integration decisions and branch map.
+### Product rule
+
+Do not invent financial facts. Bank data stays bank data; uncertain future information is explicit and user-confirmed. If missing information could materially change financial safety, ask rather than guess.
