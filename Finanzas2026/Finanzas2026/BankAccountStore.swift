@@ -68,6 +68,16 @@ final class BankAccountStore: ObservableObject {
             syncServices["nessie|\(customerID)"] = service
             lastSyncResult = try await service.syncAll()
             try await reloadFromRepository()
+
+            // A sync can succeed and still return no accounts. Without this the app
+            // reports success while `isLinked` stays false, stranding the user on the
+            // connect screen with no explanation.
+            guard !accounts.isEmpty else {
+                syncServices.removeValue(forKey: "nessie|\(customerID)")
+                phase = .failed("Connected to Nessie, but customer \(customerID) has no accounts. Check the customer ID.")
+                return
+            }
+
             phase = .connected
             startAutomaticRefreshIfNeeded()
         } catch {

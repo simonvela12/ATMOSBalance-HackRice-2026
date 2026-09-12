@@ -18,7 +18,7 @@ private struct V2AppHost: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            ProductRootView()
+            ContentView()
 
             Button {
                 showingBankLink = true

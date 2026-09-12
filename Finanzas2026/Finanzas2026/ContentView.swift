@@ -1,37 +1,60 @@
 import SwiftUI
 import Charts
+import FinanceCore
 import FinancialCore
 
 struct ContentView: View {
     @EnvironmentObject private var bankStore: BankAccountStore
-    @State private var selectedMonth = ForecastMonth.september
+    @State private var liveContext: LiveFinancialContext = .empty
+    @State private var selectedMonth = ForecastMonth.current
     @State private var selectedDay: ForecastDay?
-    @State private var showingAffordability = false
+    @State private var showingAddEntry = false
+    @State private var showingWhatIf = false
+    @State private var showingAddGoal = false
+    @State private var showingCalendar = false
     @State private var showingFullMonth = false
-    @State private var showingIntegrationControls = false
-    @State private var financialModel = AppFinancialModel()
+    @State private var addedEntries: [FinancialEntry] = []
+    @State private var goals: [FinancialGoal] = []
+    @State private var goalBeingEdited: FinancialGoal?
+    @State private var goalPendingDeletion: FinancialGoal?
+    @State private var deletedForecastDays: Set<String> = []
+    @State private var excludedOccurrences: Set<String> = []
+    @State private var occurrenceNameOverrides: [String: String] = [:]
 
-    private var month: MonthForecast {
-        MockForecast.data(for: selectedMonth)
-    }
-
-    private var financialSnapshot: AppFinancialSnapshot {
-        try! effectiveFinancialModel.snapshot(through: selectedMonth.horizonDate)
-    }
-
-    private var effectiveFinancialModel: AppFinancialModel {
-        financialModel.usingBankData(
-            accounts: bankStore.accounts,
+    /// Rebuilding the profile and the projected path is expensive, and the forecast
+    /// views read `month` many times per render, so it is cached and refreshed only
+    /// when the linked-bank data actually changes.
+    private func rebuildLiveContext() {
+        guard bankStore.isLinked else {
+            liveContext = .empty
+            return
+        }
+        let profile = AppFinancialData.profile(
+            currentCash: bankStore.totalAvailableCash,
             transactions: bankStore.transactions
+        )
+        let timeline = (try? FinancialInsights.cashFlowTimeline(
+            profile: profile,
+            from: profile.asOfDate,
+            through: AppFinancialData.horizon(from: profile.asOfDate),
+            calendar: AppFinancialData.calendar
+        )) ?? []
+        liveContext = LiveFinancialContext(
+            profile: profile,
+            transactions: bankStore.transactions,
+            timeline: timeline
         )
     }
 
-    private var displayedWeather: MoneyWeather {
-        selectedMonth == .august ? month.overallWeather : financialSnapshot.horizonStatus.moneyWeather
-    }
-
-    private var displayedBalance: Int {
-        selectedMonth == .august ? month.accountBalance : Int(financialSnapshot.projectedCash.rounded())
+    private var month: MonthForecast {
+        MockForecast.data(
+            for: selectedMonth,
+            including: addedEntries,
+            excludingForecastDays: deletedForecastDays,
+            excludingOccurrences: excludedOccurrences,
+            occurrenceNameOverrides: occurrenceNameOverrides,
+            live: liveContext
+        )
     }
 
     private var isInsightsPreview: Bool {
@@ -42,23 +65,28 @@ struct ContentView: View {
 #endif
     }
 
+    private var activityDays: [ForecastDay] {
+        month.days.filter { $0.amount != 0 }
+    }
+
     private var displayedDays: [ForecastDay] {
-        if showingFullMonth { return month.days }
+        if showingFullMonth { return activityDays }
 
-        if let todayIndex = month.days.firstIndex(where: { $0.status == .today }) {
-            return Array(month.days[todayIndex...].prefix(7))
+        if let todayIndex = activityDays.firstIndex(where: { $0.status == .today }) {
+            let startIndex = max(0, todayIndex - 2)
+            return Array(activityDays[startIndex...].prefix(7))
         }
 
-        if selectedMonth == .august {
-            return Array(month.days.suffix(7))
+        if selectedMonth.isPast {
+            return Array(activityDays.suffix(7))
         }
 
-        return Array(month.days.prefix(7))
+        return Array(activityDays.prefix(7))
     }
 
     var body: some View {
         ZStack {
-            AtmosphericBackground(weather: displayedWeather)
+            AtmosphericBackground(weather: month.overallWeather)
 
             ScrollView {
                 VStack(spacing: 0) {
@@ -70,7 +98,9 @@ struct ContentView: View {
                     } else {
                         topBar
                         hero
+                        goalsSection
                         monthSelector
+                            .padding(.top, 16)
                         forecastCard
                         balanceChart
                         spendingMetrics
@@ -82,31 +112,74 @@ struct ContentView: View {
             .scrollIndicators(.hidden)
         }
         .preferredColorScheme(.dark)
+        .task { rebuildLiveContext() }
+        .onChange(of: bankStore.accounts) { _, _ in rebuildLiveContext() }
+        .onChange(of: bankStore.transactions) { _, _ in rebuildLiveContext() }
         .animation(.easeInOut(duration: 0.45), value: selectedMonth)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            affordabilityButton
+            whatIfButton
         }
         .sheet(item: $selectedDay) { day in
-            DayDetailSheet(day: day)
+            DayDetailSheet(
+                day: day,
+                onRename: renameEntry,
+                onDelete: deleteEntry
+            )
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
-        .sheet(isPresented: $showingAffordability) {
-            AffordabilitySheet(
-                model: effectiveFinancialModel,
-                planningHorizon: selectedMonth.horizonDate,
-                startingWeather: displayedWeather
-            )
+        .sheet(isPresented: $showingAddEntry) {
+            AddEntrySheet { entry in
+                addedEntries.append(entry)
+                if let visibleMonth = ForecastMonth.containing(entry.startDate) {
+                    selectedMonth = visibleMonth
+                    showingFullMonth = true
+                }
+            }
             .presentationDetents([.large])
             .presentationDragIndicator(.visible)
         }
-        .sheet(isPresented: $showingIntegrationControls) {
-            IntegrationControlsSheet(
-                model: $financialModel,
-                bankStore: bankStore,
-                planningHorizon: selectedMonth.horizonDate
+        .sheet(isPresented: $showingWhatIf) {
+            WhatIfSheet(accountBalance: month.accountBalance, goals: goals)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showingAddGoal) {
+            AddGoalSheet(existingGoal: goalBeingEdited) { goal in
+                if let index = goals.firstIndex(where: { $0.id == goal.id }) {
+                    goals[index] = goal
+                } else {
+                    goals.append(goal)
+                }
+                goalBeingEdited = nil
+            }
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+        }
+        .confirmationDialog(
+            "Delete goal?",
+            isPresented: Binding(
+                get: { goalPendingDeletion != nil },
+                set: { if !$0 { goalPendingDeletion = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: goalPendingDeletion
+        ) { goal in
+            Button("Delete \(goal.name)", role: .destructive) {
+                goals.removeAll { $0.id == goal.id }
+                goalPendingDeletion = nil
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: { goal in
+            Text("This removes the goal from your plan. It does not delete any bank activity.")
+        }
+        .sheet(isPresented: $showingCalendar) {
+            CalendarForecastSheet(
+                month: month,
+                onRename: renameEntry,
+                onDelete: deleteEntry
             )
-            .presentationDetents([.medium, .large])
+            .presentationDetents([.large])
             .presentationDragIndicator(.visible)
         }
     }
@@ -119,29 +192,29 @@ struct ContentView: View {
                 Image(systemName: "cloud.sun.fill")
                     .font(.system(size: 18, weight: .semibold))
                     .symbolRenderingMode(.palette)
-                    .foregroundStyle(Color.sunGold, .white.opacity(0.9))
+                    .foregroundStyle(.white.opacity(0.9), Color.sunGold)
             }
             .frame(width: 42, height: 42)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text("FINANZAS")
-                    .font(.caption.weight(.heavy))
+                    .font(.helvetica(.caption, weight: .heavy))
                     .tracking(1.6)
                 Text("Financial weather")
-                    .font(.caption2)
+                    .font(.helvetica(.caption2))
                     .foregroundStyle(.white.opacity(0.62))
             }
 
             Spacer()
 
-            Text(bankStore.isLinked ? "NESSIE" : "DEMO")
-                .font(.caption2.weight(.bold))
+            Text("DEMO")
+                .font(.helvetica(.caption2, weight: .bold))
                 .tracking(0.8)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .background(.white.opacity(0.12), in: Capsule())
 
-            Button { showingIntegrationControls = true } label: {
+            Button(action: {}) {
                 Image(systemName: "person.crop.circle.fill")
                     .font(.system(size: 30))
                     .symbolRenderingMode(.hierarchical)
@@ -157,49 +230,41 @@ struct ContentView: View {
     private var hero: some View {
         VStack(spacing: 8) {
             Text(month.month.displayName)
-                .font(.title3.weight(.semibold))
+                .font(.helvetica(.title3, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.82))
 
-            Text("$\(displayedBalance.formatted(.number.grouping(.automatic)))")
-                .font(.system(size: 74, weight: .thin, design: .rounded))
+            Text("$\(month.accountBalance.formatted(.number.grouping(.automatic)))")
+                .font(.helvetica(size: 74, weight: .thin))
                 .tracking(-4)
-                .contentTransition(.numericText(value: Double(displayedBalance)))
+                .contentTransition(.numericText(value: Double(month.accountBalance)))
 
-            Text(selectedMonth == .august ? month.balanceLabel : "FinancialCore projected balance")
-                .font(.title3.weight(.medium))
+            Text(month.balanceLabel)
+                .font(.helvetica(.title3, weight: .medium))
                 .foregroundStyle(.white.opacity(0.9))
 
             HStack(spacing: 8) {
-                Image(systemName: displayedWeather.symbol)
+                Image(systemName: month.overallWeather.symbol)
                     .symbolRenderingMode(.palette)
                     .foregroundStyle(
-                        displayedWeather.primaryColor,
-                        displayedWeather.secondaryColor
+                        month.overallWeather.primaryColor,
+                        month.overallWeather.secondaryColor
                     )
-                Text(selectedMonth == .august ? month.conditionTitle : financialSnapshot.horizonStatus.rawValue)
+                Text(month.conditionTitle)
                     .fontWeight(.semibold)
             }
-            .font(.headline)
+            .font(.helvetica(.headline))
             .padding(.top, 6)
 
-            Text(selectedMonth == .august ? month.summary : "\(financialSnapshot.safeToSpendNow.formatted(.currency(code: "USD").precision(.fractionLength(0)))) safe to spend while preserving your reserve and commitments.")
-                .font(.subheadline)
-                .foregroundStyle(.white.opacity(0.68))
-                .multilineTextAlignment(.center)
-                .lineSpacing(3)
-                .frame(maxWidth: 315)
-                .padding(.top, 3)
-
-            if let today = month.days.first(where: { $0.status == .today }) {
+            if let today = month.days.first(where: { $0.status == .today && $0.amount != 0 }) {
                 HStack(spacing: 7) {
                     Text("TODAY")
-                        .font(.caption2.weight(.bold))
+                        .font(.helvetica(.caption2, weight: .bold))
                         .tracking(0.7)
                     Image(systemName: today.weather.symbol)
                         .symbolRenderingMode(.palette)
                         .foregroundStyle(today.weather.primaryColor, today.weather.secondaryColor)
                     Text(today.formattedAmount)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.helvetica(.subheadline, weight: .semibold))
                         .monospacedDigit()
                 }
                 .padding(.horizontal, 12)
@@ -217,10 +282,18 @@ struct ContentView: View {
     }
 
     private var monthSelector: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
                 ForEach(ForecastMonth.allCases) { forecastMonth in
                     let isSelected = forecastMonth == selectedMonth
+                    let forecastWeather = MockForecast.data(
+                        for: forecastMonth,
+                        including: addedEntries,
+                        excludingForecastDays: deletedForecastDays,
+                        excludingOccurrences: excludedOccurrences,
+                        occurrenceNameOverrides: occurrenceNameOverrides
+                    ).overallWeather
 
                     Button {
                         withAnimation(.easeInOut(duration: 0.4)) {
@@ -229,41 +302,76 @@ struct ContentView: View {
                         }
                     } label: {
                         VStack(spacing: 5) {
-                            Image(systemName: forecastMonth.mockWeather.symbol)
+                            Image(systemName: forecastWeather.symbol)
                                 .font(.system(size: 17, weight: .semibold))
                                 .symbolRenderingMode(.palette)
                                 .foregroundStyle(
-                                    forecastMonth.mockWeather.primaryColor,
-                                    forecastMonth.mockWeather.secondaryColor
+                                    forecastWeather.primaryColor,
+                                    forecastWeather.secondaryColor
                                 )
+                                .frame(width: 30, height: 25)
                             Text(forecastMonth.abbreviation)
-                                .font(.subheadline.weight(isSelected ? .bold : .semibold))
-                            Circle()
-                                .fill(isSelected ? Color.sunGold : .clear)
-                                .frame(width: 5, height: 5)
+                                .font(.helvetica(.subheadline, weight: isSelected ? .bold : .semibold))
+                            HStack(spacing: 4) {
+                                Circle()
+                                    .fill(isSelected ? Color.sunGold : .clear)
+                                    .frame(width: 5, height: 5)
+                                Text(forecastMonth.yearLabel)
+                                    .font(.helvetica(.caption2, weight: .medium))
+                                    .foregroundStyle(.white.opacity(0.38))
+                            }
                         }
                         .foregroundStyle(isSelected ? .white : .white.opacity(0.5))
-                        .frame(width: 57, height: 70)
+                        .frame(width: 60, height: 78)
                         .background(
                             isSelected ? .white.opacity(0.16) : .clear,
-                            in: RoundedRectangle(cornerRadius: 17, style: .continuous)
+                            in: RoundedRectangle(cornerRadius: 13, style: .continuous)
                         )
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(forecastMonth.displayName)
                     .accessibilityAddTraits(isSelected ? .isSelected : [])
+                    .id(forecastMonth.id)
+                }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+            }
+            .background(.black.opacity(0.14), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(.white.opacity(0.12), lineWidth: 0.75)
+            }
+            .padding(.horizontal, 20)
+            .sensoryFeedback(.selection, trigger: selectedMonth)
+            .onAppear {
+                proxy.scrollTo(selectedMonth.id, anchor: .center)
+            }
+            .onChange(of: selectedMonth) { _, newMonth in
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    proxy.scrollTo(newMonth.id, anchor: .center)
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
         }
-        .background(.black.opacity(0.14), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(.white.opacity(0.12), lineWidth: 0.75)
-        }
+    }
+
+    private var goalsSection: some View {
+        GoalsCard(
+            goals: goals,
+            onAdd: {
+                goalBeingEdited = nil
+                showingAddGoal = true
+            },
+            onEdit: { goal in
+                goalBeingEdited = goal
+                showingAddGoal = true
+            },
+            onDelete: { goal in
+                goalPendingDeletion = goal
+            }
+        )
         .padding(.horizontal, 20)
-        .sensoryFeedback(.selection, trigger: selectedMonth)
+        .padding(.top, 16)
     }
 
     private var forecastCard: some View {
@@ -274,48 +382,65 @@ struct ContentView: View {
                 .overlay(.white.opacity(0.14))
                 .padding(.horizontal, 16)
 
-            LazyVStack(spacing: 0) {
-                ForEach(Array(displayedDays.enumerated()), id: \.element.id) { index, day in
-                    Button {
-                        selectedDay = day
-                    } label: {
-                        ForecastDayRow(day: day)
-                    }
-                    .buttonStyle(.plain)
-
-                    if index < displayedDays.count - 1 {
-                        Divider()
-                            .overlay(.white.opacity(0.09))
-                            .padding(.leading, 74)
-                            .padding(.trailing, 16)
-                    }
+            if displayedDays.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "tray")
+                        .font(.system(size: 25, weight: .light))
+                        .foregroundStyle(.white.opacity(0.55))
+                    Text("No entries for this month")
+                        .font(.helvetica(.headline, weight: .semibold))
+                    Text("Use + to add an entry, or connect bank data later.")
+                        .font(.helvetica(.caption))
+                        .foregroundStyle(.white.opacity(0.5))
                 }
-            }
-
-            Divider()
-                .overlay(.white.opacity(0.12))
-                .padding(.horizontal, 16)
-
-            Button {
-                withAnimation(.easeInOut(duration: 0.3)) {
-                    showingFullMonth.toggle()
-                }
-            } label: {
-                HStack(spacing: 7) {
-                    Text(showingFullMonth ? "Show fewer days" : "Show all \(month.days.count) days")
-                    Image(systemName: showingFullMonth ? "chevron.up" : "chevron.down")
-                        .font(.caption2.weight(.bold))
-                }
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.72))
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 15)
+                .padding(.vertical, 28)
+            } else {
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(displayedDays.enumerated()), id: \.element.id) { index, day in
+                        Button {
+                            selectedDay = day
+                        } label: {
+                            ForecastDayRow(day: day)
+                        }
+                        .buttonStyle(.plain)
+
+                        if index < displayedDays.count - 1 {
+                            Divider()
+                                .overlay(.white.opacity(0.09))
+                                .padding(.leading, 74)
+                                .padding(.trailing, 16)
+                        }
+                    }
+                }
             }
-            .buttonStyle(.plain)
+
+            if activityDays.count > 7 {
+                Divider()
+                    .overlay(.white.opacity(0.12))
+                    .padding(.horizontal, 16)
+
+                Button {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        showingFullMonth.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 7) {
+                        Text(showingFullMonth ? "Show fewer changes" : "Show all \(activityDays.count) changes")
+                        Image(systemName: showingFullMonth ? "chevron.up" : "chevron.down")
+                            .font(.helvetica(.caption2, weight: .bold))
+                    }
+                    .font(.helvetica(.subheadline, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.72))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 15)
+                }
+                .buttonStyle(.plain)
+            }
         }
-        .background(.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .background(.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .stroke(.white.opacity(0.13), lineWidth: 0.75)
         }
         .padding(.horizontal, 20)
@@ -324,21 +449,39 @@ struct ContentView: View {
 
     private var forecastHeader: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("DAILY CHANGES")
-                        .font(.caption.weight(.bold))
+                        .font(.helvetica(.caption, weight: .bold))
                         .tracking(1.2)
                         .foregroundStyle(.white.opacity(0.62))
                     Text("\(month.month.displayName) activity")
-                        .font(.title3.weight(.semibold))
+                        .font(.helvetica(.title3, weight: .semibold))
                 }
 
-                Spacer()
+                HStack(spacing: 8) {
+                    Button {
+                        showingCalendar = true
+                    } label: {
+                        Label("Calendar view", systemImage: "calendar")
+                            .font(.helvetica(.caption, weight: .semibold))
+                            .fixedSize(horizontal: true, vertical: false)
+                            .padding(.horizontal, 11)
+                            .frame(height: 44)
+                            .background(.white.opacity(0.12), in: Capsule())
+                    }
+                    .accessibilityLabel("Open expanded calendar view")
+                    .buttonStyle(.plain)
 
-                Text("\(month.days.count) days")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.white.opacity(0.5))
+                    Button {
+                        showingAddEntry = true
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .accessibilityLabel("Add entry")
+                    .buttonStyle(ForecastToolbarButtonStyle())
+                }
+                .foregroundStyle(.white)
             }
 
             HStack(spacing: 14) {
@@ -347,17 +490,24 @@ struct ContentView: View {
                 ForecastLegendItem(title: "Forecast", style: .forecast)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(18)
     }
 
     private var balanceChart: some View {
-        BalanceChartCard(points: MockForecast.balancePoints)
+        BalanceChartCard(
+            points: MockForecast.balancePoints(
+                including: addedEntries,
+                excludingForecastDays: deletedForecastDays,
+                excludingOccurrences: excludedOccurrences
+            )
+        )
             .padding(.horizontal, 20)
             .padding(.top, 16)
     }
 
     private var spendingMetrics: some View {
-        SpendingMetricsCard(month: month, snapshot: financialSnapshot)
+        SpendingMetricsCard(month: month)
             .padding(.horizontal, 20)
             .padding(.top, 16)
     }
@@ -369,42 +519,43 @@ struct ContentView: View {
             Text("Daily icons show scheduled money movement. The large condition shows the selected month’s overall financial comfort.")
                 .lineSpacing(2)
         }
-        .font(.caption)
+        .font(.helvetica(.caption))
         .foregroundStyle(.white.opacity(0.55))
         .padding(.horizontal, 28)
         .padding(.top, 14)
     }
 
-    private var affordabilityButton: some View {
+    private var whatIfButton: some View {
         Button {
-            showingAffordability = true
+            showingWhatIf = true
         } label: {
             HStack(spacing: 13) {
-                Image(systemName: "sparkles")
+                Image(systemName: "wand.and.stars")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(Color.sunGold)
                     .frame(width: 38, height: 38)
                     .background(.white.opacity(0.1), in: Circle())
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Can I afford this?")
-                        .font(.headline)
-                    Text("Preview a purchase in your forecast")
-                        .font(.caption)
+                    Text("What if?")
+                        .font(.helvetica(.headline))
+                    Text("Preview a purchase or subscription")
+                        .font(.helvetica(.caption))
                         .foregroundStyle(.white.opacity(0.58))
                 }
 
                 Spacer()
 
                 Image(systemName: "chevron.up")
-                    .font(.caption.weight(.bold))
+                    .font(.helvetica(.caption, weight: .bold))
                     .foregroundStyle(.white.opacity(0.55))
             }
             .foregroundStyle(.white)
             .padding(12)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(.black.opacity(0.22), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(.white.opacity(0.18), lineWidth: 0.75)
             }
             .shadow(color: .black.opacity(0.2), radius: 16, y: 8)
@@ -413,6 +564,43 @@ struct ContentView: View {
         .padding(.horizontal, 16)
         .padding(.top, 8)
         .padding(.bottom, 6)
+    }
+
+    private func renameEntry(_ target: ForecastEntryTarget, name: String, scope: OccurrenceScope) {
+        switch target {
+        case .custom(let entryID, let occurrenceKey):
+            if scope == .onlyThis {
+                occurrenceNameOverrides[occurrenceKey] = name
+            } else if let index = addedEntries.firstIndex(where: { $0.id == entryID }) {
+                addedEntries[index].name = name
+            }
+        case .forecastDay:
+            break
+        }
+        selectedDay = nil
+    }
+
+    private func deleteEntry(_ target: ForecastEntryTarget, scope: OccurrenceScope) {
+        switch target {
+        case .custom(let entryID, let occurrenceKey):
+            if scope == .onlyThis {
+                excludedOccurrences.insert(occurrenceKey)
+            } else {
+                addedEntries.removeAll { $0.id == entryID }
+                occurrenceNameOverrides = occurrenceNameOverrides.filter { !$0.key.hasPrefix(entryID.uuidString) }
+            }
+        case .forecastDay(let dayID):
+            deletedForecastDays.insert(dayID)
+        }
+        selectedDay = nil
+    }
+}
+
+private struct ForecastToolbarButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .frame(width: 44, height: 44)
+            .background(.white.opacity(configuration.isPressed ? 0.2 : 0.11), in: Circle())
     }
 }
 
@@ -423,11 +611,11 @@ private struct ForecastDayRow: View {
         HStack(spacing: 12) {
             VStack(spacing: 1) {
                 Text(day.weekday.uppercased())
-                    .font(.caption2.weight(.bold))
+                    .font(.helvetica(.caption2, weight: .bold))
                     .tracking(0.7)
                     .foregroundStyle(.white.opacity(0.48))
                 Text("\(day.day)")
-                    .font(.title3.weight(.semibold))
+                    .font(.helvetica(.title3, weight: .semibold))
                     .monospacedDigit()
             }
             .frame(width: 42)
@@ -440,22 +628,30 @@ private struct ForecastDayRow: View {
                 .opacity(day.status == .forecast ? 0.78 : 1)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(day.activityTitle)
-                    .font(.subheadline.weight(.semibold))
+                HStack(spacing: 5) {
+                    Text(day.activityTitle)
+                        .font(.helvetica(.subheadline, weight: .semibold))
+                    if day.isRecurring {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.55))
+                            .accessibilityLabel("Recurring")
+                    }
+                }
                 Label(day.status.label, systemImage: day.status.symbol)
-                    .font(.caption2.weight(.medium))
+                    .font(.helvetica(.caption2, weight: .medium))
                     .foregroundStyle(day.status.foregroundColor)
             }
 
             Spacer(minLength: 8)
 
             Text(day.formattedAmount)
-                .font(.headline.weight(.semibold))
+                .font(.helvetica(.headline, weight: .semibold))
                 .monospacedDigit()
                 .foregroundStyle(day.weather.amountColor)
 
             Image(systemName: "chevron.right")
-                .font(.caption2.weight(.bold))
+                .font(.helvetica(.caption2, weight: .bold))
                 .foregroundStyle(.white.opacity(0.28))
         }
         .foregroundStyle(.white)
@@ -463,10 +659,10 @@ private struct ForecastDayRow: View {
         .padding(.vertical, 12)
         .background {
             if day.status == .today {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(.white.opacity(0.12))
                     .overlay {
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .stroke(Color.sunGold.opacity(0.5), lineWidth: 1)
                     }
                     .padding(.horizontal, 6)
@@ -489,7 +685,7 @@ private struct ForecastLegendItem: View {
                 .font(.system(size: 8, weight: .bold))
             Text(title)
         }
-        .font(.caption2.weight(.medium))
+        .font(.helvetica(.caption2, weight: .medium))
         .foregroundStyle(style.foregroundColor)
     }
 }
@@ -497,16 +693,24 @@ private struct ForecastLegendItem: View {
 private struct BalanceChartCard: View {
     let points: [BalancePoint]
 
+    private var yDomain: ClosedRange<Double> {
+        let balances = points.map(\.balance)
+        let minimum = balances.min() ?? 750
+        let maximum = balances.max() ?? 2300
+        let padding = max(180, (maximum - minimum) * 0.16)
+        return (minimum - padding)...(maximum + padding)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("BALANCE TRAJECTORY")
-                        .font(.caption.weight(.bold))
+                        .font(.helvetica(.caption, weight: .bold))
                         .tracking(1.2)
                         .foregroundStyle(.white.opacity(0.62))
                     Text("Where your balance is heading")
-                        .font(.title3.weight(.semibold))
+                        .font(.helvetica(.title3, weight: .semibold))
                 }
 
                 Spacer()
@@ -557,12 +761,12 @@ private struct BalanceChartCard: View {
                 BalanceSeries.expected.rawValue: Color.sunGold
             ])
             .chartLegend(.hidden)
-            .chartYScale(domain: 750...2300)
+            .chartYScale(domain: yDomain)
             .chartXAxis {
                 AxisMarks(values: .stride(by: .month)) { _ in
                     AxisGridLine().foregroundStyle(.white.opacity(0.08))
                     AxisValueLabel(format: .dateTime.month(.abbreviated))
-                        .font(.caption2)
+                            .font(.helvetica(.caption2))
                         .foregroundStyle(.white.opacity(0.48))
                 }
             }
@@ -570,11 +774,28 @@ private struct BalanceChartCard: View {
                 AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { _ in
                     AxisGridLine().foregroundStyle(.white.opacity(0.09))
                     AxisValueLabel()
-                        .font(.caption2)
+                        .font(.helvetica(.caption2))
                         .foregroundStyle(.white.opacity(0.48))
                 }
             }
             .frame(height: 220)
+            .opacity(points.isEmpty ? 0 : 1)
+            .overlay {
+                if points.isEmpty {
+                    VStack(spacing: 8) {
+                        Image(systemName: "chart.xyaxis.line")
+                            .font(.system(size: 26, weight: .light))
+                        Text("No balance history yet")
+                            .font(.helvetica(.headline, weight: .semibold))
+                        Text("The chart will populate from bank data and your forecast entries.")
+                            .font(.helvetica(.caption))
+                            .foregroundStyle(.white.opacity(0.5))
+                            .multilineTextAlignment(.center)
+                    }
+                    .foregroundStyle(.white.opacity(0.7))
+                    .padding(.horizontal, 30)
+                }
+            }
 
             HStack(spacing: 8) {
                 Image(systemName: "circle.fill")
@@ -582,14 +803,14 @@ private struct BalanceChartCard: View {
                     .foregroundStyle(.white.opacity(0.55))
                 Text("Each point represents a recorded or expected account change.")
             }
-            .font(.caption2)
+            .font(.helvetica(.caption2))
             .foregroundStyle(.white.opacity(0.48))
         }
         .foregroundStyle(.white)
         .padding(18)
-        .background(.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .background(.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .stroke(.white.opacity(0.13), lineWidth: 0.75)
         }
     }
@@ -610,46 +831,64 @@ private struct ChartLegendItem: View {
                 .frame(width: 22, height: 2)
             Text(title)
         }
-        .font(.caption2.weight(.medium))
+        .font(.helvetica(.caption2, weight: .medium))
         .foregroundStyle(.white.opacity(0.58))
     }
 }
 
 private struct SpendingMetricsCard: View {
     let month: MonthForecast
-    let snapshot: AppFinancialSnapshot
+
+    private var scheduledChanges: Int {
+        month.days.filter { $0.amount != 0 }.count
+    }
+
+    private var quietDays: Int {
+        month.days.count - scheduledChanges
+    }
+
+    private var hasSpendingData: Bool {
+        month.days.contains { $0.expenses > 0 }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("FINANCIALCORE OUTLOOK")
-                    .font(.caption.weight(.bold))
+                Text("SPENDING CLIMATE")
+                    .font(.helvetica(.caption, weight: .bold))
                     .tracking(1.2)
                     .foregroundStyle(.white.opacity(0.62))
-                Text("Safe to spend now")
-                    .font(.title3.weight(.semibold))
+                Text("Average daily spending")
+                    .font(.helvetica(.title3, weight: .semibold))
             }
 
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(snapshot.safeToSpendNow, format: .currency(code: "USD").precision(.fractionLength(0)))
-                    .font(.system(size: 42, weight: .light, design: .rounded))
+                Text(month.averageDailySpending, format: .currency(code: "USD").precision(.fractionLength(2)))
+                    .font(.helvetica(size: 42, weight: .light))
                     .monospacedDigit()
-                Text("through \(month.month.displayName)")
-                    .font(.subheadline)
+                Text("per day")
+                    .font(.helvetica(.subheadline))
                     .foregroundStyle(.white.opacity(0.5))
             }
 
-            Text("Recommended weekly limit: \(snapshot.recommendedWeeklySpendingLimit.formatted(.currency(code: "USD").precision(.fractionLength(0))))")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.72))
+            if hasSpendingData {
+                HStack(spacing: 8) {
+                    ComparisonChip(delta: month.previousMonthDelta, label: "vs \(month.month.previousName)")
+                    ComparisonChip(delta: month.allTimeDelta, label: "vs all-time")
+                }
+            } else {
+                Label("Add spending history to unlock comparisons", systemImage: "chart.bar.xaxis")
+                    .font(.helvetica(.caption))
+                    .foregroundStyle(.white.opacity(0.5))
+            }
 
             Divider().overlay(.white.opacity(0.12))
 
             HStack(spacing: 0) {
                 MiniMetric(
-                    icon: "arrow.down.left",
-                    value: snapshot.expectedIncome.formatted(.currency(code: "USD").precision(.fractionLength(0))),
-                    label: "expected income"
+                    icon: "calendar.badge.clock",
+                    value: "\(scheduledChanges)",
+                    label: "scheduled changes"
                 )
 
                 Divider()
@@ -657,17 +896,17 @@ private struct SpendingMetricsCard: View {
                     .frame(height: 42)
 
                 MiniMetric(
-                    icon: "arrow.up.right",
-                    value: snapshot.committedExpenses.formatted(.currency(code: "USD").precision(.fractionLength(0))),
-                    label: "committed expenses"
+                    icon: "moon.stars.fill",
+                    value: "\(quietDays)",
+                    label: "no-change days"
                 )
             }
         }
         .foregroundStyle(.white)
         .padding(18)
-        .background(.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .background(.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .stroke(.white.opacity(0.13), lineWidth: 0.75)
         }
     }
@@ -692,20 +931,20 @@ private struct ComparisonChip: View {
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: symbol)
-                .font(.caption2.weight(.bold))
+                .font(.helvetica(.caption2, weight: .bold))
                 .foregroundStyle(delta <= 0 ? Color.rainMist : Color.sunGold)
             VStack(alignment: .leading, spacing: 1) {
                 Text(directionText)
-                    .font(.caption.weight(.semibold))
+                    .font(.helvetica(.caption, weight: .semibold))
                 Text(label)
-                    .font(.caption2)
+                    .font(.helvetica(.caption2))
                     .foregroundStyle(.white.opacity(0.46))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
-        .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
     }
 }
 
@@ -721,9 +960,9 @@ private struct MiniMetric: View {
                 .foregroundStyle(Color.cloudCream)
             VStack(alignment: .leading, spacing: 1) {
                 Text(value)
-                    .font(.headline)
+                    .font(.helvetica(.headline))
                 Text(label)
-                    .font(.caption2)
+                    .font(.helvetica(.caption2))
                     .foregroundStyle(.white.opacity(0.48))
             }
         }
@@ -731,8 +970,544 @@ private struct MiniMetric: View {
     }
 }
 
-private struct DayDetailSheet: View {
+private struct GoalsCard: View {
+    let goals: [FinancialGoal]
+    let onAdd: () -> Void
+    let onEdit: (FinancialGoal) -> Void
+    let onDelete: (FinancialGoal) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("GOALS")
+                        .font(.helvetica(.caption, weight: .bold))
+                        .tracking(1.2)
+                        .foregroundStyle(.white.opacity(0.62))
+                    Text("What you’re working toward")
+                        .font(.helvetica(.title3, weight: .semibold))
+                }
+
+                Spacer()
+
+                Button(action: onAdd) {
+                    Label("Add", systemImage: "plus")
+                        .font(.helvetica(.caption, weight: .semibold))
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 8)
+                        .background(.white.opacity(0.11), in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+
+            if goals.isEmpty {
+                Button(action: onAdd) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "target")
+                            .font(.system(size: 22, weight: .medium))
+                            .foregroundStyle(Color.sunGold)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("No goals yet")
+                                .font(.helvetica(.headline, weight: .semibold))
+                            Text("Add a trip, event, or purchase to start planning.")
+                                .font(.helvetica(.caption))
+                                .foregroundStyle(.white.opacity(0.52))
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .foregroundStyle(.white.opacity(0.35))
+                    }
+                    .padding(14)
+                    .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(goals) { goal in
+                            GoalProgressTile(
+                                goal: goal,
+                                onEdit: { onEdit(goal) },
+                                onDelete: { onDelete(goal) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(18)
+        .background(.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(.white.opacity(0.13), lineWidth: 0.75)
+        }
+    }
+}
+
+private struct GoalProgressTile: View {
+    let goal: FinancialGoal
+    let onEdit: () -> Void
+    let onDelete: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Image(systemName: goal.symbol)
+                    .foregroundStyle(.white.opacity(0.9))
+                Spacer()
+                Menu {
+                    Button(action: onEdit) {
+                        Label("Edit goal", systemImage: "pencil")
+                    }
+                    Button(role: .destructive, action: onDelete) {
+                        Label("Delete goal", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 13, weight: .bold))
+                        .frame(width: 28, height: 28)
+                        .background(.white.opacity(0.08), in: Circle())
+                }
+                .accessibilityLabel("Goal options")
+            }
+
+            Text(goal.name)
+                .font(.helvetica(.headline, weight: .semibold))
+                .lineLimit(1)
+
+            Text(goal.targetDate, format: .dateTime.month(.abbreviated).day().year())
+                .font(.helvetica(.caption2, weight: .medium))
+                .foregroundStyle(.white.opacity(0.48))
+
+            ProgressView(value: goal.progress)
+                .tint(Color.sunGold)
+
+            HStack(alignment: .firstTextBaseline) {
+                Text("$\(goal.saved.formatted())")
+                    .font(.helvetica(.subheadline, weight: .bold))
+                Text("of $\(goal.targetAmount.formatted())")
+                    .font(.helvetica(.caption2))
+                    .foregroundStyle(.white.opacity(0.5))
+                Spacer()
+                Text("\(Int(goal.progress * 100))%")
+                    .font(.helvetica(.caption, weight: .bold))
+                    .foregroundStyle(Color.sunGold)
+            }
+        }
+        .padding(14)
+        .frame(width: 230, alignment: .leading)
+        .background(.white.opacity(0.075), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
+private struct AddGoalSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let existingGoal: FinancialGoal?
+    let onSave: (FinancialGoal) -> Void
+
+    @State private var name = ""
+    @State private var amountText = ""
+    @State private var savedText = ""
+    @State private var targetDate = Calendar.current.date(byAdding: .month, value: 4, to: MockForecast.todayDate) ?? MockForecast.todayDate
+    @State private var symbol = "airplane"
+
+    init(existingGoal: FinancialGoal? = nil, onSave: @escaping (FinancialGoal) -> Void) {
+        self.existingGoal = existingGoal
+        self.onSave = onSave
+        _name = State(initialValue: existingGoal?.name ?? "")
+        _amountText = State(initialValue: existingGoal.map { String($0.targetAmount) } ?? "")
+        _savedText = State(initialValue: existingGoal.map { String($0.saved) } ?? "")
+        _targetDate = State(initialValue: existingGoal?.targetDate ?? Calendar.current.date(byAdding: .month, value: 4, to: MockForecast.todayDate) ?? MockForecast.todayDate)
+        _symbol = State(initialValue: existingGoal?.symbol ?? "airplane")
+    }
+
+    private var targetAmount: Int { Int(amountText.filter(\.isNumber)) ?? 0 }
+    private var saved: Int { Int(savedText.filter(\.isNumber)) ?? 0 }
+    private var canSave: Bool { !name.trimmingCharacters(in: .whitespaces).isEmpty && targetAmount > 0 }
+
+    var body: some View {
+        ZStack {
+            LinearGradient(colors: MoneyWeather.partlySunny.backgroundColors, startPoint: .topLeading, endPoint: .bottomTrailing)
+                .ignoresSafeArea()
+
+            ScrollView {
+                VStack(spacing: 18) {
+                    SheetTitle(
+                        eyebrow: existingGoal == nil ? "NEW GOAL" : "EDIT GOAL",
+                        title: existingGoal == nil ? "Plan something worth saving for" : "Update your objective",
+                        symbol: symbol
+                    )
+
+                    EntryCard(title: "GOAL NAME") {
+                        TextField("Trip to Miami", text: $name)
+                    }
+
+                    EntryCard(title: "TARGET AMOUNT") {
+                        CurrencyField(text: $amountText, placeholder: "1,200")
+                    }
+
+                    EntryCard(title: "ALREADY SET ASIDE") {
+                        CurrencyField(text: $savedText, placeholder: "0")
+                    }
+
+                    EntryCard(title: "TARGET DATE") {
+                        DatePicker("Goal date", selection: $targetDate, in: MockForecast.todayDate..., displayedComponents: .date)
+                            .tint(.white)
+                    }
+
+                    EntryCard(title: "ICON") {
+                        Picker("Goal icon", selection: $symbol) {
+                            Label("Travel", systemImage: "airplane").tag("airplane")
+                            Label("Event", systemImage: "ticket.fill").tag("ticket.fill")
+                            Label("Purchase", systemImage: "bag.fill").tag("bag.fill")
+                            Label("Education", systemImage: "graduationcap.fill").tag("graduationcap.fill")
+                        }
+                        .pickerStyle(.menu)
+                        .tint(.white)
+                    }
+
+                    PrimarySheetButton(title: existingGoal == nil ? "Add goal" : "Save changes", enabled: canSave) {
+                        onSave(FinancialGoal(
+                            id: existingGoal?.id ?? UUID(),
+                            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+                            targetAmount: targetAmount,
+                            saved: min(saved, targetAmount),
+                            targetDate: targetDate,
+                            symbol: symbol
+                        ))
+                        dismiss()
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 28)
+            }
+            .scrollIndicators(.hidden)
+        }
+        .preferredColorScheme(.dark)
+    }
+}
+
+private struct WhatIfSheet: View {
+    let accountBalance: Int
+    let goals: [FinancialGoal]
+
+    @State private var amountText = ""
+    @State private var schedule = EntrySchedule.oneTime
+    @State private var repeatEvery = 1
+    @State private var repeatUnit = RepeatUnit.month
+
+    private var amount: Int { Int(amountText.filter(\.isNumber)) ?? 0 }
+    private var threeMonthCost: Int {
+        guard schedule == .recurring else { return amount }
+        let occurrences: Double
+        switch repeatUnit {
+        case .day: occurrences = 90 / Double(repeatEvery)
+        case .week: occurrences = 13 / Double(repeatEvery)
+        case .month: occurrences = 3 / Double(repeatEvery)
+        case .year: occurrences = 1
+        }
+        return amount * max(1, Int(occurrences.rounded(.up)))
+    }
+    private var projectedBalance: Int { accountBalance - threeMonthCost }
+    private var resultWeather: MoneyWeather {
+        if projectedBalance >= 1500 { return .partlySunny }
+        if projectedBalance >= 900 { return .cloudy }
+        if projectedBalance >= 300 { return .rain }
+        return .storm
+    }
+
+    var body: some View {
+        ZStack {
+            LinearGradient(colors: resultWeather.backgroundColors, startPoint: .topLeading, endPoint: .bottomTrailing)
+                .ignoresSafeArea()
+
+            ScrollView {
+                VStack(spacing: 18) {
+                    SheetTitle(eyebrow: "WHAT IF?", title: schedule == .recurring ? "Try a recurring payment" : "Try a purchase", symbol: resultWeather.symbol)
+
+                    EntryCard(title: "PURCHASE AMOUNT") {
+                        CurrencyField(text: $amountText, placeholder: "80")
+                    }
+
+                    EntryCard(title: "TYPE") {
+                        Picker("Payment type", selection: $schedule) {
+                            Text("One-time").tag(EntrySchedule.oneTime)
+                            Text("Recurring").tag(EntrySchedule.recurring)
+                        }
+                        .pickerStyle(.segmented)
+
+                        if schedule == .recurring {
+                            HStack {
+                                Text("Repeat every")
+                                Spacer()
+                                Stepper("\(repeatEvery)", value: $repeatEvery, in: 1...30)
+                                    .fixedSize()
+                            }
+                            Picker("Frequency", selection: $repeatUnit) {
+                                ForEach(RepeatUnit.allCases) { unit in
+                                    Text(repeatEvery == 1 ? unit.singular : unit.plural).tag(unit)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .tint(.white)
+                        }
+                    }
+
+                    if amount > 0 {
+                        VStack(spacing: 0) {
+                            ScenarioMetric(title: "Balance now", value: "$\(accountBalance.formatted())")
+                            Divider().overlay(.white.opacity(0.12))
+                            ScenarioMetric(title: schedule == .recurring ? "Balance after 90 days" : "Balance after purchase", value: "$\(projectedBalance.formatted())")
+                            if schedule == .recurring {
+                                Divider().overlay(.white.opacity(0.12))
+                                ScenarioMetric(title: "Estimated 90-day cost", value: "−$\(threeMonthCost.formatted())")
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                        VStack(alignment: .leading, spacing: 14) {
+                            Text("GOAL IMPACT")
+                                .font(.helvetica(.caption, weight: .bold))
+                                .tracking(1.1)
+                                .foregroundStyle(.white.opacity(0.6))
+                            ForEach(goals) { goal in
+                                WhatIfGoalRow(goal: goal, purchaseImpact: threeMonthCost)
+                            }
+                        }
+                        .padding(16)
+                        .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    } else {
+                        Text("Enter an amount to see the effect on your balance and goals. Nothing here changes your real forecast.")
+                            .font(.helvetica(.subheadline))
+                            .foregroundStyle(.white.opacity(0.62))
+                            .multilineTextAlignment(.center)
+                            .padding(24)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 28)
+            }
+            .scrollIndicators(.hidden)
+        }
+        .preferredColorScheme(.dark)
+        .animation(.easeInOut(duration: 0.3), value: schedule)
+        .animation(.easeInOut(duration: 0.3), value: resultWeather)
+    }
+}
+
+private struct WhatIfGoalRow: View {
+    let goal: FinancialGoal
+    let purchaseImpact: Int
+
+    private var delayDays: Int { max(1, Int(ceil(Double(purchaseImpact) / 18.0))) }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: goal.symbol)
+                .frame(width: 34, height: 34)
+                .background(.white.opacity(0.1), in: Circle())
+            VStack(alignment: .leading, spacing: 2) {
+                Text(goal.name).font(.helvetica(.subheadline, weight: .semibold))
+                Text("Could delay this goal by about \(delayDays) days")
+                    .font(.helvetica(.caption))
+                    .foregroundStyle(.white.opacity(0.54))
+            }
+            Spacer()
+            Text("−$\(min(purchaseImpact, goal.remaining).formatted())")
+                .font(.helvetica(.caption, weight: .bold))
+                .foregroundStyle(Color.sunGold)
+        }
+    }
+}
+
+private struct ScenarioMetric: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        HStack {
+            Text(title).foregroundStyle(.white.opacity(0.64))
+            Spacer()
+            Text(value).font(.helvetica(.headline, weight: .semibold)).monospacedDigit()
+        }
+        .padding(.vertical, 14)
+    }
+}
+
+private struct CalendarForecastSheet: View {
+    let month: MonthForecast
+    let onRename: (ForecastEntryTarget, String, OccurrenceScope) -> Void
+    let onDelete: (ForecastEntryTarget, OccurrenceScope) -> Void
+    @State private var selectedDay: ForecastDay?
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 7)
+
+    private var leadingSpaces: Int {
+        var components = DateComponents()
+        components.year = month.month.year
+        components.month = month.month.monthNumber
+        components.day = 1
+        let date = Calendar.current.date(from: components) ?? .now
+        return Calendar.current.component(.weekday, from: date) - 1
+    }
+
+    var body: some View {
+        ZStack {
+            LinearGradient(colors: month.overallWeather.backgroundColors, startPoint: .topLeading, endPoint: .bottomTrailing)
+                .ignoresSafeArea()
+
+            ScrollView {
+                VStack(spacing: 20) {
+                    SheetTitle(eyebrow: "MONTHLY CALENDAR", title: month.month.displayName, symbol: "calendar")
+
+                    LazyVGrid(columns: columns, spacing: 8) {
+                        ForEach(["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"], id: \.self) { weekday in
+                            Text(weekday)
+                                .font(.helvetica(.caption2, weight: .bold))
+                                .foregroundStyle(.white.opacity(0.48))
+                        }
+
+                        ForEach(0..<leadingSpaces, id: \.self) { _ in
+                            Color.clear.frame(height: 76)
+                        }
+
+                        ForEach(month.days) { day in
+                            Button { selectedDay = day } label: {
+                                CalendarDayCell(day: day)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(12)
+                    .background(.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+
+                    Text("Tap any day for its income and spending breakdown.")
+                        .font(.helvetica(.caption))
+                        .foregroundStyle(.white.opacity(0.52))
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 28)
+            }
+        }
+        .preferredColorScheme(.dark)
+        .sheet(item: $selectedDay) { day in
+            DayDetailSheet(day: day, onRename: onRename, onDelete: onDelete)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+    }
+}
+
+private struct CalendarDayCell: View {
     let day: ForecastDay
+
+    var body: some View {
+        VStack(spacing: 5) {
+            Text("\(day.day)")
+                .font(.helvetica(.caption, weight: day.status == .today ? .bold : .medium))
+            if day.amount != 0 {
+                Image(systemName: day.weather.symbol)
+                    .font(.system(size: 15))
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(day.weather.primaryColor, day.weather.secondaryColor)
+                Text(day.formattedAmount)
+                    .font(.helvetica(.caption2, weight: .semibold))
+                    .minimumScaleFactor(0.65)
+            } else {
+                Spacer().frame(height: 27)
+                Text("—").font(.helvetica(.caption2)).foregroundStyle(.white.opacity(0.28))
+            }
+        }
+        .foregroundStyle(.white)
+        .frame(maxWidth: .infinity, minHeight: 70)
+        .background(day.status == .today ? Color.sunGold.opacity(0.18) : .white.opacity(day.amount == 0 ? 0.035 : 0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            if day.status == .today {
+                RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.sunGold.opacity(0.65))
+            }
+        }
+    }
+}
+
+private struct SheetTitle: View {
+    let eyebrow: String
+    let title: String
+    let symbol: String
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(eyebrow).font(.helvetica(.caption, weight: .bold)).tracking(1.4).foregroundStyle(.white.opacity(0.62))
+                Text(title).font(.helvetica(.title2, weight: .bold))
+            }
+            Spacer()
+            Image(systemName: symbol)
+                .font(.system(size: 36, weight: .medium))
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(
+                    MoneyWeather.allCases.first(where: { $0.symbol == symbol })?.primaryColor ?? .white.opacity(0.9),
+                    MoneyWeather.allCases.first(where: { $0.symbol == symbol })?.secondaryColor ?? .white.opacity(0.9)
+                )
+                .frame(width: 48, height: 48)
+        }
+        .padding(.top, 16)
+    }
+}
+
+private struct CurrencyField: View {
+    @Binding var text: String
+    let placeholder: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text("$").foregroundStyle(.white.opacity(0.5))
+            TextField(placeholder, text: $text).keyboardType(.numberPad)
+        }
+        .font(.helvetica(size: 38, weight: .semibold))
+    }
+}
+
+private struct PrimarySheetButton: View {
+    let title: String
+    let enabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.helvetica(.headline))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 15)
+                .foregroundStyle(Color.deepNavy)
+                .background(.white, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.48)
+    }
+}
+
+private struct DayDetailSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let day: ForecastDay
+    let onRename: (ForecastEntryTarget, String, OccurrenceScope) -> Void
+    let onDelete: (ForecastEntryTarget, OccurrenceScope) -> Void
+
+    @State private var editedName: String
+    @State private var showingRenameScope = false
+    @State private var showingDeleteScope = false
+
+    init(
+        day: ForecastDay,
+        onRename: @escaping (ForecastEntryTarget, String, OccurrenceScope) -> Void,
+        onDelete: @escaping (ForecastEntryTarget, OccurrenceScope) -> Void
+    ) {
+        self.day = day
+        self.onRename = onRename
+        self.onDelete = onDelete
+        _editedName = State(initialValue: day.activityTitle)
+    }
 
     var body: some View {
         ZStack {
@@ -747,7 +1522,7 @@ private struct DayDetailSheet: View {
                 VStack(spacing: 22) {
                     VStack(spacing: 9) {
                         Text("\(day.month.displayName) \(day.day) · \(day.status.label)")
-                            .font(.subheadline.weight(.semibold))
+                            .font(.helvetica(.subheadline, weight: .semibold))
                             .foregroundStyle(.white.opacity(0.68))
 
                         Image(systemName: day.weather.symbol)
@@ -756,10 +1531,16 @@ private struct DayDetailSheet: View {
                             .foregroundStyle(day.weather.primaryColor, day.weather.secondaryColor)
 
                         Text(day.activityTitle)
-                            .font(.title2.bold())
+                            .font(.helvetica(.title2, weight: .bold))
+
+                        if day.isRecurring {
+                            Label("Recurring", systemImage: "arrow.triangle.2.circlepath")
+                                .font(.helvetica(.caption, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.62))
+                        }
 
                         Text(day.formattedAmount)
-                            .font(.system(size: 50, weight: .light, design: .rounded))
+                            .font(.helvetica(size: 50, weight: .light))
                             .monospacedDigit()
                     }
                     .padding(.top, 16)
@@ -787,14 +1568,61 @@ private struct DayDetailSheet: View {
                         )
                     }
                     .padding(.horizontal, 16)
-                    .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                    .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .overlay {
-                        RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
                             .stroke(.white.opacity(0.12), lineWidth: 0.75)
                     }
 
+                    if let target = day.entryTarget {
+                        VStack(alignment: .leading, spacing: 12) {
+                            if target.isCustom {
+                                Text("ENTRY NAME")
+                                    .font(.helvetica(.caption, weight: .bold))
+                                    .tracking(1.1)
+                                    .foregroundStyle(.white.opacity(0.58))
+                                TextField("Entry name", text: $editedName)
+                                    .padding(12)
+                                    .background(.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                                Button("Save name") {
+                                    if day.isRecurring {
+                                        showingRenameScope = true
+                                    } else {
+                                        onRename(target, editedName, .onlyThis)
+                                        dismiss()
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                                .tint(.white)
+                            }
+
+                            Button(role: .destructive) {
+                                if day.isRecurring {
+                                    showingDeleteScope = true
+                                } else {
+                                    onDelete(target, .onlyThis)
+                                    dismiss()
+                                }
+                            } label: {
+                                Label("Delete forecast entry", systemImage: "trash")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(Color.stormLavender)
+                        }
+                        .padding(16)
+                        .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    } else if day.isBankImported {
+                        Label("Imported bank activity cannot be edited or deleted", systemImage: "lock.fill")
+                            .font(.helvetica(.caption))
+                            .foregroundStyle(.white.opacity(0.58))
+                            .multilineTextAlignment(.center)
+                            .padding(14)
+                    }
+
                     Text("This breakdown uses demonstration data and will be replaced by the team’s financial model.")
-                        .font(.caption)
+                        .font(.helvetica(.caption))
                         .foregroundStyle(.white.opacity(0.52))
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 28)
@@ -805,6 +1633,36 @@ private struct DayDetailSheet: View {
             .scrollIndicators(.hidden)
         }
         .preferredColorScheme(.dark)
+        .confirmationDialog("Rename recurring entry", isPresented: $showingRenameScope, titleVisibility: .visible) {
+            if let target = day.entryTarget {
+                Button("Only this entry") {
+                    onRename(target, editedName, .onlyThis)
+                    dismiss()
+                }
+                Button("All future occurrences") {
+                    onRename(target, editedName, .allFuture)
+                    dismiss()
+                }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Choose whether this change applies once or to the recurring series.")
+        }
+        .confirmationDialog("Delete recurring entry", isPresented: $showingDeleteScope, titleVisibility: .visible) {
+            if let target = day.entryTarget {
+                Button("Only this entry", role: .destructive) {
+                    onDelete(target, .onlyThis)
+                    dismiss()
+                }
+                Button("All future occurrences", role: .destructive) {
+                    onDelete(target, .allFuture)
+                    dismiss()
+                }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Bank activity is protected. This only changes your forecast.")
+        }
     }
 }
 
@@ -823,279 +1681,213 @@ private struct DetailRow: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.helvetica(.subheadline, weight: .semibold))
                 Text(subtitle)
-                    .font(.caption)
+                    .font(.helvetica(.caption))
                     .foregroundStyle(.white.opacity(0.55))
             }
 
             Spacer()
 
             Text(amount)
-                .font(.subheadline.weight(.bold))
+                .font(.helvetica(.subheadline, weight: .bold))
                 .monospacedDigit()
         }
         .padding(.vertical, 14)
     }
 }
 
-private struct AffordabilitySheet: View {
-    let model: AppFinancialModel
-    let planningHorizon: Date
-    let startingWeather: MoneyWeather
+private struct AddEntrySheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let onSave: (FinancialEntry) -> Void
 
+    @State private var entryKind = EntryKind.payment
+    @State private var entryName = ""
     @State private var amountText = ""
-    @State private var result: AppPurchaseResult?
-    @State private var errorText: String?
+    @State private var entryDate = MockForecast.todayDate
+    @State private var schedule = EntrySchedule.oneTime
+    @State private var repeatEvery = 1
+    @State private var repeatUnit = RepeatUnit.month
+    @State private var repeatEnding = RepeatEnding.never
+    @State private var occurrenceCount = 6
+    @State private var endDate = Calendar.current.date(byAdding: .month, value: 6, to: .now) ?? .now
     @FocusState private var amountIsFocused: Bool
 
-    private var purchaseAmount: Double? {
-        Double(amountText.filter { $0.isNumber || $0 == "." })
+    private var amount: Double? {
+        Double(amountText.replacingOccurrences(of: ",", with: "."))
     }
 
-    private var resultWeather: MoneyWeather {
-        result?.status.moneyWeather ?? startingWeather
+    private var canSave: Bool {
+        !entryName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (amount ?? 0) > 0
     }
 
-    private var resultTitle: String {
-        switch result?.status {
-        case .safe: "Forecast stays clear"
-        case .tight: "Possible, but tight"
-        case .notSafe: "Not safe right now"
-        case nil: "Try a purchase"
+    private var accentWeather: MoneyWeather {
+        entryKind == .income ? .sunny : .rain
+    }
+
+    private var recurrenceSummary: String {
+        let cadence = repeatEvery == 1
+            ? "Every \(repeatUnit.singular.lowercased())"
+            : "Every \(repeatEvery) \(repeatUnit.plural.lowercased())"
+
+        switch repeatEnding {
+        case .never:
+            return "\(cadence) · No end date"
+        case .onDate:
+            return "\(cadence) · Until \(endDate.formatted(date: .abbreviated, time: .omitted))"
+        case .afterOccurrences:
+            return "\(cadence) · \(occurrenceCount) times"
         }
     }
 
     var body: some View {
         ZStack {
             LinearGradient(
-                colors: resultWeather.backgroundColors,
+                colors: accentWeather.backgroundColors,
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
             .ignoresSafeArea()
 
             ScrollView {
-                VStack(spacing: 22) {
-                    Text("PURCHASE OUTLOOK")
-                        .font(.caption.weight(.bold))
-                        .tracking(1.4)
-                        .foregroundStyle(.white.opacity(0.62))
-                        .padding(.top, 16)
-
-                    Image(systemName: resultWeather.symbol)
-                        .font(.system(size: 70, weight: .medium))
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(resultWeather.primaryColor, resultWeather.secondaryColor)
-                        .contentTransition(.symbolEffect(.replace))
-
-                    VStack(spacing: 7) {
-                        Text(resultTitle)
-                            .font(.title.bold())
-
-                        if let result {
-                            Text(result.status.rawValue)
-                                .font(.headline.bold())
-                                .tracking(1.2)
-                            Text("\(result.projectedCashAfterPurchase.formatted(.currency(code: "USD").precision(.fractionLength(0)))) at the limiting point")
-                                .foregroundStyle(.white.opacity(0.72))
-                            Text("Reason: \(result.reason.displayName) · \(result.limitingDate.formatted(date: .abbreviated, time: .omitted))")
-                                .font(.caption)
-                                .foregroundStyle(.white.opacity(0.58))
-                                .multilineTextAlignment(.center)
-                        } else {
-                            Text("FinancialCore checks the full cash-flow horizon, reserve and buffer—not just today’s balance.")
-                                .font(.subheadline)
-                                .foregroundStyle(.white.opacity(0.68))
-                                .multilineTextAlignment(.center)
-                                .frame(maxWidth: 310)
+                VStack(spacing: 18) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("NEW ENTRY")
+                                .font(.helvetica(.caption, weight: .bold))
+                                .tracking(1.4)
+                                .foregroundStyle(.white.opacity(0.62))
+                            Text("Add to your forecast")
+                                .font(.helvetica(.title2, weight: .bold))
                         }
+
+                        Spacer()
+
+                        Image(systemName: accentWeather.symbol)
+                            .font(.system(size: 38, weight: .medium))
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(accentWeather.primaryColor, accentWeather.secondaryColor)
+                            .contentTransition(.symbolEffect(.replace))
                     }
+                    .padding(.top, 16)
 
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Can I spend…")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.white.opacity(0.72))
-
-                        HStack(spacing: 6) {
-                            Text("$").foregroundStyle(.white.opacity(0.5))
-                            TextField("450", text: $amountText)
-                                .keyboardType(.decimalPad)
-                                .focused($amountIsFocused)
-                                .onChange(of: amountText) { _, _ in result = nil }
-                        }
-                        .font(.system(size: 42, weight: .semibold, design: .rounded))
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 14)
-                        .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-
-                        Button("Run FinancialCore") {
-                            guard let purchaseAmount, purchaseAmount > 0 else { return }
-                            amountIsFocused = false
-                            do {
-                                result = try model.assessPurchase(amount: purchaseAmount, through: planningHorizon)
-                                errorText = nil
-                            } catch {
-                                errorText = String(describing: error)
+                    EntryCard(title: "TYPE") {
+                        Picker("Entry type", selection: $entryKind) {
+                            ForEach(EntryKind.allCases) { kind in
+                                Label(kind.title, systemImage: kind.symbol).tag(kind)
                             }
                         }
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 15)
-                        .foregroundStyle(Color.deepNavy)
-                        .background(.white, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
-                        .disabled((purchaseAmount ?? 0) <= 0)
-                    }
-                    .padding(18)
-                    .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-
-                    if let errorText {
-                        Text(errorText).font(.caption).foregroundStyle(.red)
+                        .pickerStyle(.segmented)
                     }
 
-                    Label("Deterministic FinancialCore result", systemImage: "checkmark.shield")
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.52))
-                }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 28)
-            }
-            .scrollIndicators(.hidden)
-        }
-        .preferredColorScheme(.dark)
-        .animation(.easeInOut(duration: 0.45), value: resultWeather)
-    }
-}
-
-private struct LegacyAffordabilitySheet: View {
-    let accountBalance: Int
-    let startingWeather: MoneyWeather
-
-    @State private var amountText = ""
-    @State private var evaluatedAmount: Int?
-    @FocusState private var amountIsFocused: Bool
-
-    private var purchaseAmount: Int? {
-        Int(amountText.filter(\.isNumber))
-    }
-
-    private var remaining: Int {
-        accountBalance - (evaluatedAmount ?? 0)
-    }
-
-    private var resultWeather: MoneyWeather {
-        guard evaluatedAmount != nil else { return startingWeather }
-        if remaining >= 1500 { return .sunny }
-        if remaining >= 1000 { return .partlySunny }
-        if remaining >= 500 { return .cloudy }
-        if remaining >= 0 { return .rain }
-        return .storm
-    }
-
-    private var resultTitle: String {
-        guard evaluatedAmount != nil else { return "Try a purchase" }
-        if remaining >= 1500 { return "Forecast stays clear" }
-        if remaining >= 1000 { return "Mostly clear afterward" }
-        if remaining >= 500 { return "Clouds move in" }
-        if remaining >= 0 { return "Balance gets tight" }
-        return "High pressure ahead"
-    }
-
-    var body: some View {
-        ZStack {
-            LinearGradient(
-                colors: resultWeather.backgroundColors,
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-
-            ScrollView {
-                VStack(spacing: 22) {
-                    Text("PURCHASE OUTLOOK")
-                        .font(.caption.weight(.bold))
-                        .tracking(1.4)
-                        .foregroundStyle(.white.opacity(0.62))
-                        .padding(.top, 16)
-
-                    Image(systemName: resultWeather.symbol)
-                        .font(.system(size: 70, weight: .medium))
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(resultWeather.primaryColor, resultWeather.secondaryColor)
-                        .contentTransition(.symbolEffect(.replace))
-
-                    VStack(spacing: 6) {
-                        Text(resultTitle)
-                            .font(.title.bold())
-                            .multilineTextAlignment(.center)
-
-                        if evaluatedAmount != nil {
-                            Text(remaining >= 0 ? "$\(remaining) projected balance" : "$\(abs(remaining)) beyond the account balance")
-                                .font(.headline.weight(.medium))
-                                .foregroundStyle(.white.opacity(0.72))
-                                .multilineTextAlignment(.center)
-                                .contentTransition(.numericText(value: Double(remaining)))
-                        } else {
-                            Text("See how a hypothetical purchase changes the projected account balance and financial weather.")
-                                .font(.subheadline)
-                                .foregroundStyle(.white.opacity(0.68))
-                                .multilineTextAlignment(.center)
-                                .frame(maxWidth: 310)
-                        }
+                    EntryCard(title: "ENTRY NAME") {
+                        TextField(entryKind == .income ? "Campus job" : "Rent payment", text: $entryName)
+                            .textInputAutocapitalization(.words)
+                            .submitLabel(.next)
                     }
 
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Can I spend…")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.white.opacity(0.72))
-
+                    EntryCard(title: "AMOUNT") {
                         HStack(spacing: 6) {
                             Text("$")
                                 .foregroundStyle(.white.opacity(0.5))
-                            TextField("80", text: $amountText)
-                                .keyboardType(.numberPad)
+                            TextField("0.00", text: $amountText)
+                                .keyboardType(.decimalPad)
                                 .focused($amountIsFocused)
-                                .onChange(of: amountText) { _, _ in
-                                    evaluatedAmount = nil
-                                }
                         }
-                        .font(.system(size: 42, weight: .semibold, design: .rounded))
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 14)
-                        .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                .stroke(.white.opacity(amountIsFocused ? 0.4 : 0.14), lineWidth: 1)
-                        }
+                        .font(.helvetica(size: 42, weight: .semibold))
+                    }
 
-                        Button {
-                            guard let purchaseAmount, purchaseAmount > 0 else { return }
-                            amountIsFocused = false
-                            withAnimation(.easeInOut(duration: 0.45)) {
-                                evaluatedAmount = purchaseAmount
+                    EntryCard(title: "DATE") {
+                        DatePicker(
+                            "Entry date",
+                            selection: $entryDate,
+                            displayedComponents: .date
+                        )
+                        .datePickerStyle(.compact)
+                        .tint(.white)
+                    }
+
+                    EntryCard(title: "SCHEDULE") {
+                        Picker("Schedule", selection: $schedule) {
+                            ForEach(EntrySchedule.allCases) { option in
+                                Text(option.title).tag(option)
                             }
-                        } label: {
-                            Text("Update forecast")
-                                .font(.headline)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 15)
-                                .foregroundStyle(Color.deepNavy)
-                                .background(.white, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
                         }
-                        .buttonStyle(.plain)
-                        .disabled((purchaseAmount ?? 0) <= 0)
-                        .opacity((purchaseAmount ?? 0) <= 0 ? 0.48 : 1)
-                    }
-                    .padding(18)
-                    .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 26, style: .continuous)
-                            .stroke(.white.opacity(0.13), lineWidth: 0.75)
+                        .pickerStyle(.segmented)
+
+                        if schedule == .recurring {
+                            Divider().overlay(.white.opacity(0.12))
+
+                            HStack {
+                                Text("Repeat every")
+                                Spacer()
+                                Stepper("\(repeatEvery)", value: $repeatEvery, in: 1...30)
+                                    .fixedSize()
+                            }
+
+                            Picker("Frequency", selection: $repeatUnit) {
+                                ForEach(RepeatUnit.allCases) { unit in
+                                    Text(repeatEvery == 1 ? unit.singular : unit.plural).tag(unit)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .tint(.white)
+
+                            Picker("Ends", selection: $repeatEnding) {
+                                ForEach(RepeatEnding.allCases) { ending in
+                                    Text(ending.title).tag(ending)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .tint(.white)
+
+                            if repeatEnding == .onDate {
+                                DatePicker("End date", selection: $endDate, in: entryDate..., displayedComponents: .date)
+                                    .tint(.white)
+                            } else if repeatEnding == .afterOccurrences {
+                                Stepper("\(occurrenceCount) occurrences", value: $occurrenceCount, in: 2...60)
+                            }
+
+                            Text(recurrenceSummary)
+                                .font(.helvetica(.caption))
+                                .foregroundStyle(.white.opacity(0.56))
+                        }
                     }
 
-                    Label("Demo estimate — not financial advice", systemImage: "wand.and.stars")
-                        .font(.caption)
+                    Button {
+                        amountIsFocused = false
+                        guard let amount, amount > 0 else { return }
+                        let entry = FinancialEntry(
+                            id: UUID(),
+                            name: entryName.trimmingCharacters(in: .whitespacesAndNewlines),
+                            kind: entryKind,
+                            amount: Int(amount.rounded()),
+                            startDate: entryDate,
+                            schedule: schedule,
+                            repeatEvery: repeatEvery,
+                            repeatUnit: repeatUnit,
+                            repeatEnding: repeatEnding,
+                            occurrenceCount: occurrenceCount,
+                            endDate: endDate
+                        )
+                        onSave(entry)
+                        dismiss()
+                    } label: {
+                        Text("Add \(entryKind.title.lowercased())")
+                            .font(.helvetica(.headline))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 15)
+                            .foregroundStyle(Color.deepNavy)
+                            .background(.white, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canSave)
+                    .opacity(canSave ? 1 : 0.48)
+
+                    Label("Entries update this demo forecast immediately", systemImage: "checkmark.circle")
+                        .font(.helvetica(.caption))
                         .foregroundStyle(.white.opacity(0.52))
+                        .multilineTextAlignment(.center)
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 28)
@@ -1103,147 +1895,170 @@ private struct LegacyAffordabilitySheet: View {
             .scrollIndicators(.hidden)
         }
         .preferredColorScheme(.dark)
-        .animation(.easeInOut(duration: 0.45), value: resultWeather)
+        .animation(.easeInOut(duration: 0.35), value: entryKind)
+        .animation(.easeInOut(duration: 0.25), value: schedule)
     }
 }
 
-private struct IntegrationControlsSheet: View {
-    @Binding var model: AppFinancialModel
-    @ObservedObject var bankStore: BankAccountStore
-    let planningHorizon: Date
-    @State private var showingLinkAccount = false
+private struct EntryCard<Content: View>: View {
+    let title: String
+    let content: Content
 
-    private var effectiveModel: AppFinancialModel {
-        model.usingBankData(accounts: bankStore.accounts, transactions: bankStore.transactions)
-    }
-
-    private var snapshot: AppFinancialSnapshot {
-        try! effectiveModel.snapshot(through: planningHorizon)
+    init(title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
     }
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section("Linked account") {
-                    if bankStore.isLinked {
-                        ForEach(bankStore.accounts) { account in
-                            LabeledContent(account.name) {
-                                Text(
-                                    Double(account.balanceMinorUnits) / 100,
-                                    format: .currency(code: account.currencyCode).precision(.fractionLength(2))
-                                )
-                            }
-                        }
-                        LabeledContent("Imported transactions", value: "\(bankStore.transactions.count)")
-                        Button("Sync another Nessie customer") { showingLinkAccount = true }
-                    } else {
-                        Button {
-                            showingLinkAccount = true
-                        } label: {
-                            Label("Link a Nessie account", systemImage: "link.circle.fill")
-                        }
-                        Text("Balances and transactions from the linked account become the source for the entire forecast.")
-                            .font(.footnote)
-                    }
-                }
-
-                Section("Qualitative decisions") {
-                    Toggle("Expense is essential / committed", isOn: $model.optionalExpenseIsCommitted)
-                    Toggle("Goal is mandatory", isOn: $model.goalIsMandatory)
-                }
-
-                Section("FinancialCore result") {
-                    LabeledContent("Projected cash") {
-                        Text(snapshot.projectedCash, format: .currency(code: "USD").precision(.fractionLength(0)))
-                    }
-                    LabeledContent("Safe to spend") {
-                        Text(snapshot.safeToSpendNow, format: .currency(code: "USD").precision(.fractionLength(0)))
-                    }
-                    LabeledContent("Current", value: snapshot.currentStatus.rawValue)
-                    LabeledContent("Horizon", value: snapshot.horizonStatus.rawValue)
-                    LabeledContent("Mandatory goals") {
-                        Text(snapshot.mandatoryGoals, format: .currency(code: "USD").precision(.fractionLength(0)))
-                    }
-                }
-
-                Section("Mapped income") {
-                    Text("Recurring income enters at full value. Irregular income enters as amount × confidence; the demo maps $300 tutoring at 70% to $210.")
-                        .font(.footnote)
-                }
-
-                Section("Integration note") {
-                    Text("These controls change qualitative inputs only. SAFE, TIGHT and NOT_SAFE always come from FinancialCore.")
-                        .font(.footnote)
-                }
-            }
-            .navigationTitle("Financial profile")
-            .sheet(isPresented: $showingLinkAccount) {
-                LinkBankAccountSheet(store: bankStore)
-                    .presentationDetents([.medium, .large])
-                    .presentationDragIndicator(.visible)
-            }
+        VStack(alignment: .leading, spacing: 14) {
+            Text(title)
+                .font(.helvetica(.caption, weight: .bold))
+                .tracking(1.1)
+                .foregroundStyle(.white.opacity(0.58))
+            content
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(.white.opacity(0.13), lineWidth: 0.75)
         }
     }
 }
 
-private struct LinkBankAccountSheet: View {
-    @ObservedObject var store: BankAccountStore
-    @Environment(\.dismiss) private var dismiss
-    @State private var customerID = ""
-    @State private var apiKey = ""
+private enum EntryKind: String, CaseIterable, Identifiable {
+    case payment
+    case income
 
-    private var canConnect: Bool {
-        !customerID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    var id: String { rawValue }
+    var title: String { rawValue.capitalized }
+    var symbol: String { self == .payment ? "arrow.up.right" : "arrow.down.left" }
+}
+
+private enum EntrySchedule: String, CaseIterable, Identifiable {
+    case oneTime
+    case recurring
+
+    var id: String { rawValue }
+    var title: String { self == .oneTime ? "One-time" : "Recurring" }
+}
+
+private enum RepeatUnit: String, CaseIterable, Identifiable {
+    case day
+    case week
+    case month
+    case year
+
+    var id: String { rawValue }
+    var singular: String { rawValue.capitalized }
+    var plural: String { "\(rawValue.capitalized)s" }
+}
+
+private enum RepeatEnding: String, CaseIterable, Identifiable {
+    case never
+    case onDate
+    case afterOccurrences
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .never: return "Never"
+        case .onDate: return "On date"
+        case .afterOccurrences: return "After occurrences"
+        }
+    }
+}
+
+private struct FinancialGoal: Identifiable {
+    let id: UUID
+    var name: String
+    let targetAmount: Int
+    let saved: Int
+    let targetDate: Date
+    let symbol: String
+
+    var progress: Double {
+        guard targetAmount > 0 else { return 0 }
+        return min(1, Double(saved) / Double(targetAmount))
     }
 
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Nessie credentials") {
-                    TextField("Customer ID", text: $customerID)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    SecureField("API key", text: $apiKey)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                }
+    var remaining: Int { max(0, targetAmount - saved) }
 
-                Section {
-                    Button {
-                        Task {
-                            await store.linkNessieAccount(apiKey: apiKey, customerID: customerID)
-                            if store.isLinked {
-                                apiKey = ""
-                                dismiss()
-                            }
-                        }
-                    } label: {
-                        HStack {
-                            if store.phase == .connecting { ProgressView() }
-                            Text(store.phase == .connecting ? "Connecting…" : "Connect & sync")
-                        }
-                        .frame(maxWidth: .infinity)
-                    }
-                    .disabled(!canConnect || store.phase == .connecting)
-                } footer: {
-                    Text("The API key stays in memory only. Normalized account and transaction data is cached on this iPhone.")
-                }
+}
 
-                if case let .failed(message) = store.phase {
-                    Section("Couldn’t connect") {
-                        Text(message).foregroundStyle(.red)
-                    }
-                }
+private struct FinancialEntry: Identifiable {
+    let id: UUID
+    var name: String
+    let kind: EntryKind
+    let amount: Int
+    let startDate: Date
+    let schedule: EntrySchedule
+    let repeatEvery: Int
+    let repeatUnit: RepeatUnit
+    let repeatEnding: RepeatEnding
+    let occurrenceCount: Int
+    let endDate: Date
+
+    var signedAmount: Int {
+        kind == .income ? amount : -amount
+    }
+
+    func occurrenceKey(for date: Date) -> String {
+        "\(id.uuidString)|\(Int(Calendar.current.startOfDay(for: date).timeIntervalSince1970))"
+    }
+
+    func occurrenceDates(through horizon: Date) -> [Date] {
+        let calendar = Calendar(identifier: .gregorian)
+        let firstDate = calendar.startOfDay(for: startDate)
+        guard firstDate <= horizon else { return [] }
+        guard schedule == .recurring else { return [firstDate] }
+
+        var dates: [Date] = []
+        var date = firstDate
+        let maximumOccurrences = repeatEnding == .afterOccurrences ? occurrenceCount : 120
+
+        while date <= horizon && dates.count < maximumOccurrences {
+            if repeatEnding == .onDate && date > calendar.startOfDay(for: endDate) { break }
+            dates.append(date)
+
+            let component: Calendar.Component
+            switch repeatUnit {
+            case .day: component = .day
+            case .week: component = .weekOfYear
+            case .month: component = .month
+            case .year: component = .year
             }
-            .navigationTitle("Link account")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-            }
+
+            guard let nextDate = calendar.date(byAdding: component, value: repeatEvery, to: date),
+                  nextDate > date else { break }
+            date = nextDate
         }
+
+        return dates
+    }
+}
+
+private struct EntryOccurrence {
+    let entry: FinancialEntry
+    let date: Date
+    let key: String
+    let displayName: String
+}
+
+private enum OccurrenceScope {
+    case onlyThis
+    case allFuture
+}
+
+private enum ForecastEntryTarget {
+    case custom(entryID: UUID, occurrenceKey: String)
+    case forecastDay(dayID: String)
+
+    var isCustom: Bool {
+        if case .custom = self { return true }
+        return false
     }
 }
 
@@ -1299,62 +2114,83 @@ private struct AtmosphericBackground: View {
 }
 
 private enum ForecastMonth: Int, CaseIterable, Identifiable {
-    case august = 8
-    case september = 9
-    case october = 10
-    case november = 11
-    case december = 12
+    case may = 202605
+    case june = 202606
+    case july = 202607
+    case august = 202608
+    case september = 202609
+    case october = 202610
+    case november = 202611
+    case december = 202612
+    case january2027 = 202701
+    case february2027 = 202702
+    case march2027 = 202703
+    case april2027 = 202704
+    case may2027 = 202705
+    case june2027 = 202706
+    case july2027 = 202707
+    case august2027 = 202708
+    case september2027 = 202709
 
     var id: Int { rawValue }
+    var year: Int { rawValue / 100 }
+    var monthNumber: Int { rawValue % 100 }
 
     var displayName: String {
-        switch self {
-        case .august: return "August"
-        case .september: return "September"
-        case .october: return "October"
-        case .november: return "November"
-        case .december: return "December"
-        }
+        year == 2026 ? monthName : "\(monthName) \(year)"
     }
 
     var abbreviation: String {
-        String(displayName.prefix(3)).uppercased()
+        String(monthName.prefix(3)).uppercased()
     }
 
     var dayCount: Int {
-        switch self {
-        case .august, .october, .december: return 31
-        case .september, .november: return 30
-        }
+        var components = DateComponents()
+        components.calendar = Calendar(identifier: .gregorian)
+        components.year = year
+        components.month = monthNumber
+        components.day = 1
+        guard let date = components.date,
+              let range = components.calendar?.range(of: .day, in: .month, for: date) else { return 30 }
+        return range.count
     }
 
-    var mockWeather: MoneyWeather {
-        switch self {
-        case .august: return .sunny
-        case .september: return .partlySunny
-        case .october: return .cloudy
-        case .november: return .rain
-        case .december: return .storm
-        }
+    var yearLabel: String {
+        "’\(String(year).suffix(2))"
     }
 
     var previousName: String {
-        switch self {
-        case .august: return "July"
-        case .september: return "August"
-        case .october: return "September"
-        case .november: return "October"
-        case .december: return "November"
-        }
-    }
-
-    var horizonDate: Date {
         var components = DateComponents()
         components.calendar = Calendar(identifier: .gregorian)
-        components.year = 2026
-        components.month = rawValue
-        components.day = dayCount
-        return components.date ?? Date(timeIntervalSince1970: 0)
+        components.year = year
+        components.month = monthNumber - 1
+        components.day = 1
+        return components.date?.formatted(.dateTime.month(.wide)) ?? "previous month"
+    }
+
+    var monthName: String {
+        var components = DateComponents()
+        components.calendar = Calendar(identifier: .gregorian)
+        components.year = year
+        components.month = monthNumber
+        components.day = 1
+        return components.date?.formatted(.dateTime.month(.wide)) ?? abbreviation
+    }
+
+    /// The month containing today, falling back to September 2026 when today is
+    /// outside the enumerated range.
+    static var current: ForecastMonth {
+        containing(Date()) ?? .september
+    }
+
+    var isPast: Bool { rawValue < ForecastMonth.current.rawValue }
+    var isCurrent: Bool { self == ForecastMonth.current }
+    var isFuture: Bool { rawValue > ForecastMonth.current.rawValue }
+
+    static func containing(_ date: Date) -> ForecastMonth? {
+        let calendar = Calendar(identifier: .gregorian)
+        let value = calendar.component(.year, from: date) * 100 + calendar.component(.month, from: date)
+        return ForecastMonth(rawValue: value)
     }
 }
 
@@ -1388,7 +2224,7 @@ private enum DayStatus {
     }
 }
 
-private enum MoneyWeather: String {
+private enum MoneyWeather: String, CaseIterable {
     case sunny
     case partlySunny
     case cloudy
@@ -1428,20 +2264,20 @@ private enum MoneyWeather: String {
     var primaryColor: Color {
         switch self {
         case .sunny: return Color.sunGold
-        case .partlySunny: return Color.sunGold
+        case .partlySunny: return Color.white
         case .cloudy: return Color.cloudSilver
-        case .rain: return Color.rainBlue
-        case .storm: return Color.stormLavender
+        case .rain: return Color.cloudSilver
+        case .storm: return Color.cloudSlate
         }
     }
 
     var secondaryColor: Color {
         switch self {
         case .sunny: return Color.sunOrange
-        case .partlySunny: return Color.cloudCream
+        case .partlySunny: return Color.sunGold
         case .cloudy: return Color.cloudSlate
-        case .rain: return Color.rainMist
-        case .storm: return Color.stormBlue
+        case .rain: return Color.rainBlue
+        case .storm: return Color.stormLavender
         }
     }
 
@@ -1480,38 +2316,6 @@ private enum MoneyWeather: String {
     }
 }
 
-private extension FinancialHealthStatus {
-    var moneyWeather: MoneyWeather {
-        switch self {
-        case .safe: .sunny
-        case .tight: .rain
-        case .notSafe: .storm
-        }
-    }
-}
-
-private extension PurchaseStatus {
-    var moneyWeather: MoneyWeather {
-        switch self {
-        case .safe: .sunny
-        case .tight: .rain
-        case .notSafe: .storm
-        }
-    }
-}
-
-private extension PurchaseDecisionReason {
-    var displayName: String {
-        switch self {
-        case .preservesRecommendedBuffer: "Preserves the recommended buffer"
-        case .usesSafetyBuffer: "Uses part of the safety buffer"
-        case .violatesPersonalReserve: "Would cross the personal reserve"
-        case .violatesInstitutionalMinimum: "Would cross an account minimum"
-        case .violatesMultipleHardConstraints: "Would cross multiple hard constraints"
-        }
-    }
-}
-
 private struct ForecastDay: Identifiable {
     let id: String
     let month: ForecastMonth
@@ -1524,6 +2328,10 @@ private struct ForecastDay: Identifiable {
     let expenses: Int
     let incomeSource: String
     let expenseSource: String
+    let entryTitle: String?
+    let entryTarget: ForecastEntryTarget?
+    let isRecurring: Bool
+    let isBankImported: Bool
 
     var formattedAmount: String {
         if amount > 0 { return "+$\(amount)" }
@@ -1532,7 +2340,7 @@ private struct ForecastDay: Identifiable {
     }
 
     var activityTitle: String {
-        amount == 0 ? "No activity" : weather.dailyTitle
+        entryTitle ?? (amount == 0 ? "No activity" : weather.dailyTitle)
     }
 }
 
@@ -1569,117 +2377,455 @@ private struct BalancePoint: Identifiable {
     let isAnchor: Bool
 }
 
-private enum MockForecast {
-    static let todayDate = makeDate(month: 9, day: 11)
+/// Real financial data, shaped for Marc's forecast views.
+///
+/// Marc's forecast UI is kept exactly as-is; this supplies the numbers it used to
+/// take from demo data. Recorded days come from linked-bank transactions, future
+/// days come from FinancialCore's projected cash path.
+private struct LiveFinancialContext {
+    let profile: FinancialProfile?
+    let transactions: [FinanceCore.FinancialTransaction]
+    let timeline: [CashFlowPoint]
 
-    static let balancePoints: [BalancePoint] = [
-        point("jun-start", 6, 1, 1180, .actual, true),
-        point("jun-income", 6, 8, 1500, .actual),
-        point("jun-rent", 6, 15, 880, .actual),
-        point("jun-work", 6, 24, 1330, .actual),
-        point("jun-close", 6, 30, 1280, .actual),
-        point("jul-income", 7, 5, 1600, .actual),
-        point("jul-rent", 7, 15, 980, .actual),
-        point("jul-work", 7, 25, 1430, .actual),
-        point("jul-close", 7, 31, 1480, .actual),
-        point("aug-spend", 8, 4, 1435, .actual),
-        point("aug-income", 8, 9, 1755, .actual),
-        point("aug-rent", 8, 15, 1135, .actual),
-        point("aug-work", 8, 24, 1585, .actual),
-        point("aug-close", 8, 31, 1530, .actual, true),
-        point("sep-spend-a", 9, 3, 1502, .actual),
-        point("sep-spend-b", 9, 8, 1456, .actual),
-        point("today-actual", 9, 11, 1842, .actual, true),
-        point("today-expected", 9, 11, 1842, .expected, true),
-        point("sep-rent", 9, 15, 1222, .expected),
-        point("sep-work", 9, 17, 1672, .expected),
-        point("sep-close", 9, 28, 1648, .expected),
-        point("oct-income", 10, 5, 1968, .expected),
-        point("oct-rent", 10, 15, 1348, .expected),
-        point("oct-work", 10, 22, 1798, .expected),
-        point("nov-income", 11, 8, 2078, .expected),
-        point("nov-rent", 11, 18, 1458, .expected),
-        point("nov-work", 11, 25, 1908, .expected),
-        point("dec-income", 12, 8, 2228, .expected),
-        point("dec-rent", 12, 18, 1608, .expected),
-        point("dec-work", 12, 23, 2058, .expected),
-        point("dec-close", 12, 28, 1973, .expected, true)
-    ]
+    /// Grouped once at construction: these lookups run for every rendered day.
+    private let transactionsByDay: [Date: [FinanceCore.FinancialTransaction]]
+    private let timelineByDay: [Date: CashFlowPoint]
 
-    static func data(for month: ForecastMonth) -> MonthForecast {
-        let overview: (
-            balance: Int,
-            balanceLabel: String,
-            weather: MoneyWeather,
-            title: String,
-            summary: String,
-            averageSpending: Double,
-            previousDelta: Int,
-            allTimeDelta: Int
+    init(
+        profile: FinancialProfile?,
+        transactions: [FinanceCore.FinancialTransaction],
+        timeline: [CashFlowPoint]
+    ) {
+        self.profile = profile
+        self.transactions = transactions
+        self.timeline = timeline
+
+        let calendar = AppFinancialData.calendar
+        self.transactionsByDay = Dictionary(
+            grouping: transactions.filter { !$0.isPending && !$0.isTransfer },
+            by: { calendar.startOfDay(for: $0.transactionDate) }
         )
+        self.timelineByDay = Dictionary(
+            timeline.map { (calendar.startOfDay(for: $0.date), $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+    }
 
-        switch month {
-        case .august:
-            overview = (1530, "Closing account balance", .sunny, "Clear", "Income comfortably covered scheduled bills and everyday spending.", 34.60, 7, 4)
-        case .september:
-            overview = (1842, "Current account balance", .partlySunny, "Mostly Clear", "Your current balance has room for scheduled bills and normal daily spending.", 31.20, -10, -6)
-        case .october:
-            overview = (1770, "Projected closing balance", .cloudy, "A Little Cloudy", "Expected income covers the major payments, with less room between them.", 32.80, 5, -1)
-        case .november:
-            overview = (1435, "Projected closing balance", .rain, "Rain Possible", "Travel and recurring payments create a tighter stretch ahead.", 39.10, 19, 18)
-        case .december:
-            overview = (1180, "Projected closing balance", .storm, "High Pressure", "Large seasonal expenses call for more careful day-to-day spending.", 44.70, 14, 34)
+    static let empty = LiveFinancialContext(profile: nil, transactions: [], timeline: [])
+
+    private var calendar: Calendar { AppFinancialData.calendar }
+
+    var hasData: Bool { profile != nil }
+
+    // MARK: Per-day figures
+
+    func recorded(on date: Date) -> (income: Int, expenses: Int, incomeSource: String, expenseSource: String) {
+        let day = calendar.startOfDay(for: date)
+        let items = transactionsByDay[day] ?? []
+        let inflow = items.filter { $0.direction == .inflow }
+        let outflow = items.filter { $0.direction == .outflow }
+        return (
+            income: Int((inflow.reduce(0) { $0 + Double($1.amountMinorUnits) / 100 }).rounded()),
+            expenses: Int((outflow.reduce(0) { $0 + Double($1.amountMinorUnits) / 100 }).rounded()),
+            incomeSource: Self.label(inflow),
+            expenseSource: Self.label(outflow)
+        )
+    }
+
+    func scheduled(on date: Date) -> (income: Int, expenses: Int, incomeSource: String, expenseSource: String) {
+        guard let profile else { return (0, 0, "Nothing scheduled", "Nothing scheduled") }
+        let day = calendar.startOfDay(for: date)
+        let incomes = profile.incomeEvents.filter { calendar.isDate($0.date, inSameDayAs: day) }
+        let expenses = profile.expenseEvents.filter { calendar.isDate($0.date, inSameDayAs: day) }
+        return (
+            income: Int((incomes.reduce(0) { $0 + $1.adjustedAmount }).rounded()),
+            expenses: Int((expenses.reduce(0) { $0 + $1.amount }).rounded()),
+            incomeSource: Self.names(incomes.map(\.source)),
+            expenseSource: Self.names(expenses.map(\.category))
+        )
+    }
+
+    func health(on date: Date) -> FinancialHealthStatus? {
+        timelineByDay[calendar.startOfDay(for: date)]?.status
+    }
+
+    func projectedCash(on date: Date) -> Double? {
+        let day = calendar.startOfDay(for: date)
+        return timeline.last { calendar.startOfDay(for: $0.date) <= day }?.projectedCash
+    }
+
+    // MARK: Month figures
+
+    /// Balance at the end of a month. Future months read the projected path;
+    /// past months are reconstructed backwards from today's cash.
+    func balance(asOf cutoff: Date) -> Double? {
+        guard let profile else { return nil }
+        let day = calendar.startOfDay(for: cutoff)
+        let today = calendar.startOfDay(for: profile.asOfDate)
+
+        if day >= today {
+            return projectedCash(on: day) ?? profile.currentCash
+        }
+
+        let since = transactions
+            .filter { !$0.isPending && !$0.isTransfer }
+            .filter { calendar.startOfDay(for: $0.transactionDate) > day }
+            .reduce(0.0) { $0 + Double($1.signedAmountMinorUnits) / 100 }
+        return profile.currentCash - since
+    }
+
+    func overallWeather(for month: ForecastMonth) -> MoneyWeather? {
+        guard profile != nil else { return nil }
+        let statuses = timeline
+            .filter {
+                calendar.component(.year, from: $0.date) == month.year &&
+                calendar.component(.month, from: $0.date) == month.monthNumber
+            }
+            .map(\.status)
+
+        guard !statuses.isEmpty else { return nil }
+        if statuses.contains(.notSafe) { return .storm }
+        if statuses.contains(.tight) { return .rain }
+        return .sunny
+    }
+
+    // MARK: Labels
+
+    private static func label(_ items: [FinanceCore.FinancialTransaction]) -> String {
+        let sorted = items.sorted { $0.amountMinorUnits > $1.amountMinorUnits }
+        guard let first = sorted.first else { return "Nothing recorded" }
+        let name = AppFinancialData.label(first)
+        return sorted.count > 1 ? "\(name) + \(sorted.count - 1) more" : name
+    }
+
+    private static func names(_ values: [String]) -> String {
+        let cleaned = values
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard let first = cleaned.first else { return "Nothing scheduled" }
+        return cleaned.count > 1 ? "\(first) + \(cleaned.count - 1) more" : first
+    }
+}
+
+private enum MockForecast {
+    static var todayDate: Date { Calendar(identifier: .gregorian).startOfDay(for: Date()) }
+    static let balancePoints: [BalancePoint] = []
+
+    static func balancePoints(
+        including entries: [FinancialEntry],
+        excludingForecastDays: Set<String> = [],
+        excludingOccurrences: Set<String> = []
+    ) -> [BalancePoint] {
+        let horizon = makeDate(year: 2027, month: 9, day: 30)
+        let occurrences = entryOccurrences(
+            for: entries,
+            through: horizon,
+            excluding: excludingOccurrences,
+            nameOverrides: [:]
+        )
+        let deletedAdjustments = forecastDeletionAdjustments(for: excludingForecastDays)
+
+        let adjustedBasePoints = Self.balancePoints.map { point in
+            let adjustment = occurrences
+                .filter { $0.date <= point.date }
+                .reduce(0) { $0 + $1.entry.signedAmount }
+                + deletedAdjustments
+                    .filter { $0.date <= point.date }
+                    .reduce(0) { $0 + $1.amount }
+
+            return BalancePoint(
+                id: point.id,
+                date: point.date,
+                balance: point.balance + Double(adjustment),
+                series: point.series,
+                isAnchor: point.isAnchor
+            )
+        }
+
+        let entryPoints = occurrences.compactMap { occurrence -> BalancePoint? in
+            guard occurrence.date >= makeDate(year: 2026, month: 5, day: 1) else { return nil }
+            let baseBalance = Self.balancePoints
+                .filter { $0.date <= occurrence.date }
+                .last?.balance ?? Self.balancePoints.first?.balance ?? 0
+            let adjustment = occurrences
+                .filter { $0.date <= occurrence.date }
+                .reduce(0) { $0 + $1.entry.signedAmount }
+                + deletedAdjustments
+                    .filter { $0.date <= occurrence.date }
+                    .reduce(0) { $0 + $1.amount }
+
+            return BalancePoint(
+                id: "entry-\(occurrence.entry.id.uuidString)-\(occurrence.date.timeIntervalSince1970)",
+                date: occurrence.date,
+                balance: baseBalance + Double(adjustment),
+                series: occurrence.date <= todayDate ? .actual : .expected,
+                isAnchor: true
+            )
+        }
+
+        return (adjustedBasePoints + entryPoints).sorted {
+            if $0.date == $1.date { return $0.series.rawValue < $1.series.rawValue }
+            return $0.date < $1.date
+        }
+    }
+
+    static func data(
+        for month: ForecastMonth,
+        including entries: [FinancialEntry] = [],
+        excludingForecastDays: Set<String> = [],
+        excludingOccurrences: Set<String> = [],
+        occurrenceNameOverrides: [String: String] = [:],
+        live: LiveFinancialContext = .empty
+    ) -> MonthForecast {
+        let balanceLabel: String
+        if month.isPast {
+            balanceLabel = "Closing account balance"
+        } else if month.isCurrent {
+            balanceLabel = "Current account balance"
+        } else {
+            balanceLabel = "Projected closing balance"
+        }
+
+        let calendar = Calendar(identifier: .gregorian)
+        let monthEnd = makeDate(year: month.year, month: month.monthNumber, day: month.dayCount)
+        let balanceCutoff = month.isCurrent ? todayDate : monthEnd
+        let occurrences = entryOccurrences(
+            for: entries,
+            through: makeDate(year: 2027, month: 9, day: 30),
+            excluding: excludingOccurrences,
+            nameOverrides: occurrenceNameOverrides
+        )
+        let deletedAdjustments = forecastDeletionAdjustments(for: excludingForecastDays)
+        let balanceAdjustment = occurrences
+            .filter { $0.date <= balanceCutoff }
+            .reduce(0) { $0 + $1.entry.signedAmount }
+            + deletedAdjustments
+                .filter { $0.date <= balanceCutoff }
+                .reduce(0) { $0 + $1.amount }
+        let monthOccurrences = occurrences.filter {
+            calendar.component(.year, from: $0.date) == month.year &&
+            calendar.component(.month, from: $0.date) == month.monthNumber
+        }
+        let addedSpending = monthOccurrences
+            .filter { $0.entry.kind == .payment }
+            .reduce(0) { $0 + $1.entry.amount }
+        let removedSpending = (1...month.dayCount)
+            .filter { excludingForecastDays.contains("\(month.rawValue)-\($0)") }
+            .map { mockAmount(month: month, day: $0) }
+            .filter { $0 < 0 }
+            .reduce(0) { $0 + abs($1) }
+        let liveBalance = live.balance(asOf: balanceCutoff).map { Int($0.rounded()) } ?? 0
+        let adjustedBalance = liveBalance + balanceAdjustment
+        let hasData = live.hasData || !entries.isEmpty
+        let adjustedWeather: MoneyWeather
+        if !hasData {
+            adjustedWeather = .cloudy
+        } else {
+            adjustedWeather = live.overallWeather(for: month) ?? comfortWeather(for: adjustedBalance)
+        }
+
+        let days = makeDays(
+            for: month,
+            occurrences: monthOccurrences,
+            excludingForecastDays: excludingForecastDays,
+            live: live
+        )
+        let monthSpending = days.reduce(0) { $0 + $1.expenses }
+        let monthIncome = days.reduce(0) { $0 + $1.income }
+
+        let summary: String
+        if !hasData {
+            summary = "Connect a bank account or add an entry to begin your financial forecast."
+        } else if month.isPast {
+            summary = "\(month.displayName) recorded $\(monthIncome) in and $\(monthSpending) out."
+        } else {
+            summary = "Projected from your linked accounts, scheduled bills, and confirmed context."
         }
 
         return MonthForecast(
             month: month,
-            accountBalance: overview.balance,
-            balanceLabel: overview.balanceLabel,
-            overallWeather: overview.weather,
-            conditionTitle: overview.title,
-            summary: overview.summary,
-            averageDailySpending: overview.averageSpending,
-            previousMonthDelta: overview.previousDelta,
-            allTimeDelta: overview.allTimeDelta,
-            days: makeDays(for: month)
+            accountBalance: adjustedBalance,
+            balanceLabel: balanceLabel,
+            overallWeather: adjustedWeather,
+            conditionTitle: hasData ? conditionTitle(for: adjustedWeather) : "No Data Yet",
+            summary: summary,
+            averageDailySpending: max(
+                0,
+                Double(monthSpending + addedSpending - removedSpending) / Double(month.dayCount)
+            ),
+            previousMonthDelta: 0,
+            allTimeDelta: 0,
+            days: days
         )
     }
 
-    private static func makeDays(for month: ForecastMonth) -> [ForecastDay] {
+    private static func makeDays(
+        for month: ForecastMonth,
+        occurrences: [EntryOccurrence] = [],
+        excludingForecastDays: Set<String> = [],
+        live: LiveFinancialContext = .empty
+    ) -> [ForecastDay] {
         (1...month.dayCount).map { day in
-            let amount = mockAmount(month: month, day: day)
-            let weather = weather(for: amount)
+            let date = makeDate(year: month.year, month: month.monthNumber, day: day)
+            let dayID = "\(month.rawValue)-\(day)"
             let status = status(for: month, day: day)
-            let routineSpending = 18 + ((day * 7) % 38)
-            let income = amount > 0 ? amount + routineSpending : 0
-            let expenses = amount > 0 ? routineSpending : abs(amount)
+            let isExcluded = excludingForecastDays.contains(dayID)
+
+            // Recorded days come from the bank; today and future days come from
+            // the profile's scheduled events on the engine's projected path.
+            let bank = live.recorded(on: date)
+            let planned = status == .forecast ? live.scheduled(on: date) : (income: 0, expenses: 0, incomeSource: "Nothing scheduled", expenseSource: "Nothing scheduled")
+
+            let baseIncome = isExcluded ? 0 : bank.income + planned.income
+            let baseExpenses = isExcluded ? 0 : bank.expenses + planned.expenses
+
+            let matchingEntries = occurrences.filter {
+                Calendar.current.component(.day, from: $0.date) == day
+            }
+            let entryIncome = matchingEntries
+                .filter { $0.entry.kind == .income }
+                .reduce(0) { $0 + $1.entry.amount }
+            let entryExpenses = matchingEntries
+                .filter { $0.entry.kind == .payment }
+                .reduce(0) { $0 + $1.entry.amount }
+
+            let income = baseIncome + entryIncome
+            let expenses = baseExpenses + entryExpenses
+            let amount = income - expenses
+
+            // Forecast weather follows the health of the projected cash path, so a
+            // large planned bill is not automatically a bad day. Recorded days have
+            // no projection left to judge, so they describe what actually moved.
+            let dayWeather: MoneyWeather
+            if status == .recorded {
+                dayWeather = weather(for: amount)
+            } else if let health = live.health(on: date) {
+                switch health {
+                case .safe: dayWeather = .sunny
+                case .tight: dayWeather = .rain
+                case .notSafe: dayWeather = .storm
+                }
+            } else {
+                dayWeather = weather(for: amount)
+            }
+
+            let customNames = matchingEntries.map(\.displayName).joined(separator: ", ")
+            let entryTitle: String?
+            if matchingEntries.count == 1 && baseIncome == 0 && baseExpenses == 0 {
+                entryTitle = matchingEntries[0].displayName
+            } else if !matchingEntries.isEmpty {
+                entryTitle = "\(matchingEntries.count) entries"
+            } else {
+                entryTitle = nil
+            }
+
+            let entryTarget: ForecastEntryTarget?
+            if matchingEntries.count == 1 {
+                entryTarget = .custom(
+                    entryID: matchingEntries[0].entry.id,
+                    occurrenceKey: matchingEntries[0].key
+                )
+            } else if status == .forecast && amount != 0 {
+                entryTarget = .forecastDay(dayID: dayID)
+            } else {
+                entryTarget = nil
+            }
+
+            let incomeSource: String
+            if matchingEntries.contains(where: { $0.entry.kind == .income }) {
+                incomeSource = customNames
+            } else if bank.income > 0 {
+                incomeSource = bank.incomeSource
+            } else if planned.income > 0 {
+                incomeSource = planned.incomeSource
+            } else {
+                incomeSource = status == .recorded ? "Nothing recorded" : "Nothing scheduled"
+            }
+
+            let expenseSource: String
+            if matchingEntries.contains(where: { $0.entry.kind == .payment }) {
+                expenseSource = customNames
+            } else if bank.expenses > 0 {
+                expenseSource = bank.expenseSource
+            } else if planned.expenses > 0 {
+                expenseSource = planned.expenseSource
+            } else {
+                expenseSource = status == .recorded ? "Nothing recorded" : "Nothing scheduled"
+            }
 
             return ForecastDay(
-                id: "\(month.rawValue)-\(day)",
+                id: dayID,
                 month: month,
                 day: day,
                 weekday: weekday(month: month, day: day),
                 amount: amount,
-                weather: weather,
+                weather: dayWeather,
                 status: status,
                 income: income,
                 expenses: expenses,
-                incomeSource: income == 0 ? "Nothing scheduled" : (income >= 300 ? "Campus job deposit" : "Transfer or side income"),
-                expenseSource: expenses == 0 ? "Nothing scheduled" : (expenses >= 300 ? "Rent and scheduled bills" : "Dining, transit, and daily spending")
+                incomeSource: incomeSource,
+                expenseSource: expenseSource,
+                entryTitle: entryTitle,
+                entryTarget: entryTarget,
+                isRecurring: matchingEntries.contains { $0.entry.schedule == .recurring },
+                isBankImported: matchingEntries.isEmpty && (bank.income > 0 || bank.expenses > 0)
             )
         }
     }
 
-    private static func mockAmount(month: ForecastMonth, day: Int) -> Int {
-        let scheduledChanges: [ForecastMonth: [Int: Int]] = [
-            .august: [3: -18, 7: -42, 9: 320, 12: -24, 15: -620, 20: -74, 24: 450, 29: -38],
-            .september: [2: -12, 4: -28, 8: -46, 11: 320, 15: -620, 17: 450, 22: -74, 28: -24],
-            .october: [3: -45, 5: 320, 10: -18, 15: -620, 22: 450, 28: -92],
-            .november: [4: -36, 8: 280, 14: -88, 18: -620, 25: 450],
-            .december: [2: -55, 8: 320, 12: -110, 18: -620, 23: 450, 28: -85]
-        ]
+    private static func entryOccurrences(
+        for entries: [FinancialEntry],
+        through horizon: Date,
+        excluding excludedKeys: Set<String>,
+        nameOverrides: [String: String]
+    ) -> [EntryOccurrence] {
+        entries.flatMap { entry in
+            entry.occurrenceDates(through: horizon).compactMap { date in
+                let key = entry.occurrenceKey(for: date)
+                guard !excludedKeys.contains(key) else { return nil }
+                return EntryOccurrence(
+                    entry: entry,
+                    date: date,
+                    key: key,
+                    displayName: nameOverrides[key] ?? entry.name
+                )
+            }
+        }
+    }
 
-        return scheduledChanges[month]?[day] ?? 0
+    private static func forecastDeletionAdjustments(
+        for deletedDayIDs: Set<String>
+    ) -> [(date: Date, amount: Int)] {
+        ForecastMonth.allCases.flatMap { month in
+            (1...month.dayCount).compactMap { day in
+                let dayID = "\(month.rawValue)-\(day)"
+                let amount = mockAmount(month: month, day: day)
+                guard deletedDayIDs.contains(dayID), amount != 0 else { return nil }
+                return (makeDate(year: month.year, month: month.monthNumber, day: day), -amount)
+            }
+        }
+    }
+
+    private static func comfortWeather(for balance: Int) -> MoneyWeather {
+        if balance >= 2000 { return .sunny }
+        if balance >= 1400 { return .partlySunny }
+        if balance >= 900 { return .cloudy }
+        if balance >= 300 { return .rain }
+        return .storm
+    }
+
+    private static func conditionTitle(for weather: MoneyWeather) -> String {
+        switch weather {
+        case .sunny: return "Clear"
+        case .partlySunny: return "Mostly Clear"
+        case .cloudy: return "A Little Cloudy"
+        case .rain: return "Rain Possible"
+        case .storm: return "High Pressure"
+        }
+    }
+
+    private static func mockAmount(month: ForecastMonth, day: Int) -> Int {
+        0
     }
 
     private static func weather(for amount: Int) -> MoneyWeather {
@@ -1691,10 +2837,11 @@ private enum MockForecast {
     }
 
     private static func status(for month: ForecastMonth, day: Int) -> DayStatus {
-        if month == .august { return .recorded }
-        if month == .september {
-            if day < 11 { return .recorded }
-            if day == 11 { return .today }
+        if month.isPast { return .recorded }
+        if month.isCurrent {
+            let todayDay = Calendar(identifier: .gregorian).component(.day, from: Date())
+            if day < todayDay { return .recorded }
+            if day == todayDay { return .today }
         }
         return .forecast
     }
@@ -1702,35 +2849,18 @@ private enum MockForecast {
     private static func weekday(month: ForecastMonth, day: Int) -> String {
         var components = DateComponents()
         components.calendar = Calendar(identifier: .gregorian)
-        components.year = 2026
-        components.month = month.rawValue
+        components.year = month.year
+        components.month = month.monthNumber
         components.day = day
 
         guard let date = components.date else { return "Day" }
         return date.formatted(.dateTime.weekday(.abbreviated))
     }
 
-    private static func point(
-        _ id: String,
-        _ month: Int,
-        _ day: Int,
-        _ balance: Double,
-        _ series: BalanceSeries,
-        _ isAnchor: Bool = false
-    ) -> BalancePoint {
-        BalancePoint(
-            id: id,
-            date: makeDate(month: month, day: day),
-            balance: balance,
-            series: series,
-            isAnchor: isAnchor
-        )
-    }
-
-    private static func makeDate(month: Int, day: Int) -> Date {
+    private static func makeDate(year: Int, month: Int, day: Int) -> Date {
         var components = DateComponents()
         components.calendar = Calendar(identifier: .gregorian)
-        components.year = 2026
+        components.year = year
         components.month = month
         components.day = day
         return components.date ?? Date(timeIntervalSince1970: 0)
@@ -1757,6 +2887,35 @@ private extension Color {
             blue: Double(hex & 0xff) / 255,
             opacity: opacity
         )
+    }
+}
+
+private extension Font {
+    static func helvetica(
+        _ style: Font.TextStyle,
+        weight: Font.Weight = .regular
+    ) -> Font {
+        let size: CGFloat
+        switch style {
+        case .largeTitle: size = 34
+        case .title: size = 28
+        case .title2: size = 22
+        case .title3: size = 20
+        case .headline: size = 17
+        case .subheadline: size = 15
+        case .body: size = 17
+        case .callout: size = 16
+        case .footnote: size = 13
+        case .caption: size = 12
+        case .caption2: size = 11
+        @unknown default: size = 17
+        }
+
+        return .system(size: size, weight: weight, design: .default)
+    }
+
+    static func helvetica(size: CGFloat, weight: Font.Weight = .regular) -> Font {
+        .system(size: size, weight: weight, design: .rounded)
     }
 }
 
