@@ -20,7 +20,7 @@ workflows:
           set -euo pipefail
           xcodebuild \
             -project Finanzas2026/Finanzas2026.xcodeproj \
-            -target Finanzas2026 \
+            -scheme Finanzas2026 \
             -configuration Release \
             -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' \
