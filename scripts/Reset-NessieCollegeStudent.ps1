@@ -5,7 +5,9 @@ param(
 
     [string]$ApiKey = $env:NESSIE_API_KEY,
 
-    [switch]$ResetExisting
+    [switch]$ResetExisting,
+
+    [string]$ExistingAccountID
 )
 
 $ErrorActionPreference = 'Stop'
@@ -40,34 +42,43 @@ function Get-CreatedObject {
     return $Response
 }
 
-$existing = @(Invoke-Nessie -Method GET -Path "customers/$CustomerID/accounts")
-if ($ResetExisting) {
-    foreach ($account in $existing) {
-        $accountID = $account._id
-        if ($PSCmdlet.ShouldProcess("Nessie account $accountID", 'Delete account and its transaction history')) {
-            $null = Invoke-Nessie -Method DELETE -Path "accounts/$accountID"
-        }
+$existing = @((Invoke-Nessie -Method GET -Path "customers/$CustomerID/accounts") | ForEach-Object { $_ })
+if ($ExistingAccountID) {
+    if ($ResetExisting) { throw '-ExistingAccountID and -ResetExisting cannot be used together.' }
+    if ($ExistingAccountID -notin @($existing._id)) {
+        throw "Account $ExistingAccountID does not belong to customer $CustomerID."
     }
-} elseif ($existing.Count -gt 0) {
-    throw "Customer already has $($existing.Count) account(s). Re-run with -ResetExisting to replace them."
-}
+    $accountID = $ExistingAccountID
+} else {
+    if ($ResetExisting) {
+        foreach ($account in $existing) {
+            $accountID = $account._id
+            if ($PSCmdlet.ShouldProcess("Nessie account $accountID", 'Delete account and its transaction history')) {
+                # The current Nessie API Gateway requires the trailing slash for DELETE.
+                $null = Invoke-Nessie -Method DELETE -Path "accounts/$accountID/"
+            }
+        }
+    } elseif ($existing.Count -gt 0) {
+        throw "Customer already has $($existing.Count) account(s). Re-run with -ResetExisting to replace them."
+    }
 
-$remaining = @(Invoke-Nessie -Method GET -Path "customers/$CustomerID/accounts")
-if ($remaining.Count -gt 0) {
-    throw "Reset did not complete: $($remaining.Count) Nessie account(s) still exist."
-}
+    $remaining = @((Invoke-Nessie -Method GET -Path "customers/$CustomerID/accounts") | ForEach-Object { $_ })
+    if ($remaining.Count -gt 0) {
+        throw "Reset did not complete: $($remaining.Count) Nessie account(s) still exist."
+    }
 
-$accountNumber = -join (1..16 | ForEach-Object { Get-Random -Minimum 0 -Maximum 10 })
-$accountResponse = Invoke-Nessie -Method POST -Path "customers/$CustomerID/accounts" -Body @{
-    type           = 'Checking'
-    nickname       = 'College Checking'
-    rewards        = 0
-    balance        = 2350.00
-    account_number = $accountNumber
+    $accountNumber = -join (1..16 | ForEach-Object { Get-Random -Minimum 0 -Maximum 10 })
+    $accountResponse = Invoke-Nessie -Method POST -Path "customers/$CustomerID/accounts" -Body @{
+        type           = 'Checking'
+        nickname       = 'College Checking'
+        rewards        = 0
+        balance        = 2350.00
+        account_number = $accountNumber
+    }
+    $account = Get-CreatedObject $accountResponse
+    $accountID = if ($account._id) { $account._id } else { $account.id }
+    if ([string]::IsNullOrWhiteSpace($accountID)) { throw 'Nessie did not return the new account ID.' }
 }
-$account = Get-CreatedObject $accountResponse
-$accountID = if ($account._id) { $account._id } else { $account.id }
-if ([string]::IsNullOrWhiteSpace($accountID)) { throw 'Nessie did not return the new account ID.' }
 
 $today = [DateTime]::UtcNow.Date
 $monthStarts = @(
@@ -123,14 +134,45 @@ $createdPurchases = 0
 $createdDeposits = 0
 $createdTransfers = 0
 
+function Get-TransactionKey {
+    param([string]$Date, [decimal]$Amount, [string]$Description)
+    "$Date|$Amount|$Description"
+}
+
+function Get-ExistingTransactions {
+    param([string]$Kind)
+    try {
+        @((Invoke-Nessie -Method GET -Path "accounts/$accountID/$Kind") | ForEach-Object { $_ })
+    } catch {
+        if ($_.Exception.Response.StatusCode.value__ -eq 404) { return @() }
+        throw
+    }
+}
+
+$existingDeposits = @(Get-ExistingTransactions 'deposits')
+$existingPurchases = @(Get-ExistingTransactions 'purchases')
+$existingTransfers = @(Get-ExistingTransactions 'transfers')
+$depositKeys = [System.Collections.Generic.HashSet[string]]::new([string[]]@($existingDeposits | ForEach-Object {
+    Get-TransactionKey $_.transaction_date ([decimal]$_.amount) $_.description
+}))
+$purchaseKeys = [System.Collections.Generic.HashSet[string]]::new([string[]]@($existingPurchases | ForEach-Object {
+    Get-TransactionKey $_.purchase_date ([decimal]$_.amount) $_.description
+}))
+$transferKeys = [System.Collections.Generic.HashSet[string]]::new([string[]]@($existingTransfers | ForEach-Object {
+    Get-TransactionKey $_.transaction_date ([decimal]$_.amount) $_.description
+}))
+
 foreach ($item in $deposits) {
     if ($item.date -gt $today) { continue }
+    $description = "$($item.description) [COLLEGE-3M]"
+    $key = Get-TransactionKey $item.date.ToString('yyyy-MM-dd') ([decimal]$item.amount) $description
+    if ($depositKeys.Contains($key)) { continue }
     $null = Invoke-Nessie -Method POST -Path "accounts/$accountID/deposits" -Body @{
         medium          = 'balance'
         transaction_date = $item.date.ToString('yyyy-MM-dd')
         amount          = [decimal]$item.amount
         status          = 'completed'
-        description     = "$($item.description) [COLLEGE-3M]"
+        description     = $description
     }
     $createdDeposits++
 }
@@ -138,23 +180,30 @@ foreach ($item in $deposits) {
 foreach ($item in $purchases) {
     if ($item.date -gt $today) { continue }
     $merchantID = $merchants[$item.merchant]
-    $null = Invoke-Nessie -Method POST -Path "merchants/$merchantID/accounts/$accountID/purchases" -Body @{
+    $description = "$($item.description) [COLLEGE-3M]"
+    $key = Get-TransactionKey $item.date.ToString('yyyy-MM-dd') ([decimal]$item.amount) $description
+    if ($purchaseKeys.Contains($key)) { continue }
+    $null = Invoke-Nessie -Method POST -Path "accounts/$accountID/purchases" -Body @{
+        merchant_id   = $merchantID
         medium        = 'balance'
         purchase_date = $item.date.ToString('yyyy-MM-dd')
         amount        = [decimal]$item.amount
         status        = 'completed'
-        description   = "$($item.description) [COLLEGE-3M]"
+        description   = $description
     }
     $createdPurchases++
 }
 
 foreach ($item in $transfers) {
     if ($item.date -gt $today) { continue }
+    $description = "$($item.description) [COLLEGE-3M]"
+    $key = Get-TransactionKey $item.date.ToString('yyyy-MM-dd') ([decimal]$item.amount) $description
+    if ($transferKeys.Contains($key)) { continue }
     $null = Invoke-Nessie -Method POST -Path "accounts/$accountID/transfers" -Body @{
         transaction_date = $item.date.ToString('yyyy-MM-dd')
         amount            = [decimal]$item.amount
         status            = 'completed'
-        description       = "$($item.description) [COLLEGE-3M]"
+        description       = $description
     }
     $createdTransfers++
 }
