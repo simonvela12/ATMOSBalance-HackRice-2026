@@ -22,11 +22,18 @@ public actor FileFinancialRepository: FinancialDataRepository {
             let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
             let store = try decoder.decode(Store.self, from: data)
             let rebuilt = InMemoryFinancialRepository()
-            let transactionsByCustomer = Dictionary(grouping: store.transactions, by: \.externalCustomerID)
+            let accountsByOwner = Dictionary(grouping: store.accounts) {
+                Self.ownerKey(provider: $0.provider, customerID: $0.externalCustomerID)
+            }
+            let transactionsByOwner = Dictionary(grouping: store.transactions) {
+                Self.ownerKey(provider: $0.provider, customerID: $0.externalCustomerID)
+            }
             for connection in store.connections {
-                let relatedAccounts = store.accounts.filter { $0.externalCustomerID == connection.externalCustomerID }
-                _ = try await rebuilt.persist(connection: connection, accounts: relatedAccounts,
-                                              transactions: transactionsByCustomer[connection.externalCustomerID] ?? [])
+                let owner = Self.ownerKey(provider: connection.provider,
+                                          customerID: connection.externalCustomerID)
+                _ = try await rebuilt.persist(connection: connection,
+                                              accounts: accountsByOwner[owner] ?? [],
+                                              transactions: transactionsByOwner[owner] ?? [])
             }
             self.memory = rebuilt
         } catch {
@@ -63,5 +70,9 @@ public actor FileFinancialRepository: FinancialDataRepository {
         } catch {
             throw BankingError.persistenceError("Could not write \(fileURL.path): \(error.localizedDescription)")
         }
+    }
+
+    private static func ownerKey(provider: BankingProviderID, customerID: String) -> String {
+        "\(provider.rawValue)|\(customerID)"
     }
 }

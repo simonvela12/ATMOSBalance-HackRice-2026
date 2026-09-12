@@ -29,10 +29,21 @@ public actor BankSyncService {
         var connection = try await provider.connect()
         let externalAccounts = try await provider.fetchAccounts()
         let normalizedAccounts = externalAccounts.map { BankingDomainMapper.account($0, syncedAt: startedAt) }
-        var normalizedTransactions: [FinancialTransaction] = []
-        for account in externalAccounts {
-            let fetched = try await provider.fetchTransactions(for: account)
-            normalizedTransactions += fetched.map { BankingDomainMapper.transaction($0, syncedAt: startedAt) }
+        let provider = self.provider
+        let normalizedTransactions = try await withThrowingTaskGroup(
+            of: [FinancialTransaction].self,
+            returning: [FinancialTransaction].self
+        ) { group in
+            for account in externalAccounts {
+                group.addTask {
+                    let fetched = try await provider.fetchTransactions(for: account)
+                    return fetched.map { BankingDomainMapper.transaction($0, syncedAt: startedAt) }
+                }
+            }
+            var combined: [FinancialTransaction] = []
+            combined.reserveCapacity(externalAccounts.count * 16)
+            for try await transactions in group { combined.append(contentsOf: transactions) }
+            return combined
         }
         let finishedAt = Date()
         connection.status = .connected; connection.lastSyncedAt = finishedAt

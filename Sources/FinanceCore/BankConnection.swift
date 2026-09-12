@@ -1,6 +1,6 @@
 import Foundation
 
-public enum BankingProviderID: String, Codable, Sendable { case nessie, plaid }
+public enum BankingProviderID: String, Codable, Sendable { case nessie, plaid, demo }
 public enum BankConnectionStatus: String, Codable, Sendable { case connecting, connected, disconnected, failed }
 
 public struct BankConnection: Identifiable, Codable, Hashable, Sendable {
