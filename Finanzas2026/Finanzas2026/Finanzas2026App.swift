@@ -78,6 +78,9 @@ private struct NessieConnectionSheet: View {
                         Label("No linked bank loaded", systemImage: "link")
                     case .loadingCache:
                         Label("Loading saved bank history", systemImage: "externaldrive")
+                    case .cached:
+                        Label("Saved Nessie data loaded — reconnect to resume live refresh", systemImage: "externaldrive.badge.exclamationmark")
+                            .foregroundStyle(.orange)
                     case .connecting:
                         HStack {
                             ProgressView()
@@ -92,7 +95,24 @@ private struct NessieConnectionSheet: View {
                     }
                 }
 
-                if bankStore.isLinked {
+                if let result = bankStore.lastSyncResult {
+                    Section("Last Nessie import") {
+                        LabeledContent("Accounts", value: "\(result.accountsFetched)")
+                        LabeledContent("Transactions fetched", value: "\(result.transactionsFetched)")
+                        LabeledContent("Transfers available", value: "\(bankStore.importedTransferCount)")
+                        LabeledContent("Balance integrated") {
+                            Text(bankStore.totalAvailableCash, format: .currency(code: "USD"))
+                                .monospacedDigit()
+                        }
+                        LabeledContent("New this sync", value: "\(result.transactionsInserted)")
+                        LabeledContent("Updated this sync", value: "\(result.transactionsUpdated)")
+                        LabeledContent("Finished") {
+                            Text(result.finishedAt, format: .dateTime.hour().minute().second())
+                        }
+                    }
+                }
+
+                if bankStore.canRefresh {
                     Section {
                         Button("Refresh linked accounts") {
                             Task { await bankStore.refreshLinkedAccounts() }
@@ -115,7 +135,6 @@ private struct NessieConnectionSheet: View {
                                 apiKey: apiKey.trimmingCharacters(in: .whitespacesAndNewlines),
                                 customerID: customerID.trimmingCharacters(in: .whitespacesAndNewlines)
                             )
-                            if bankStore.isLinked { dismiss() }
                         }
                     }
                     .disabled(

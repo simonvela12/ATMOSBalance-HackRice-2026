@@ -191,6 +191,7 @@ struct ContentView: View {
         }
         .onChange(of: bankStore.accounts) { _, _ in rebuildLiveContext() }
         .onChange(of: bankStore.transactions) { _, _ in rebuildLiveContext() }
+        .onChange(of: bankStore.syncRevision) { _, _ in rebuildLiveContext() }
         .onChange(of: currentPlan) { _, plan in
             PlanPersistence.save(plan)
             rebuildLiveContext()
@@ -1639,7 +1640,7 @@ private struct DayDetailSheet: View {
                         DetailRow(
                             icon: "equal",
                             title: "Net movement",
-                            subtitle: "Mock daily total",
+                            subtitle: "Recorded daily total",
                             amount: day.formattedAmount
                         )
                     }

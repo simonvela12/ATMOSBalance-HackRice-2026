@@ -29,6 +29,7 @@ struct ProductRootView: View {
         .task { refreshProfile() }
         .onChange(of: bankStore.accounts) { _, _ in refreshProfile() }
         .onChange(of: bankStore.transactions) { _, _ in refreshProfile() }
+        .onChange(of: bankStore.syncRevision) { _, _ in refreshProfile() }
     }
 
     private func refreshProfile() {
@@ -125,6 +126,7 @@ private struct V2Home: View {
         switch phase {
         case .connecting: return "Refreshing linked accounts…"
         case .loadingCache: return "Loading saved bank history…"
+        case .cached: return "Saved Nessie data loaded; reconnect to resume live refresh."
         case .failed(_): return "Using saved data; refresh needs attention."
         case .connected: return "Normalized bank data is feeding the plan."
         case .idle: return linked ? "Linked data is available." : "Connect Nessie to load balances and transactions."
