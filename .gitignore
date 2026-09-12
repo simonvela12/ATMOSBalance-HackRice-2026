@@ -1,0 +1,11 @@
+# Python cache files from earlier prototypes
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Xcode user-specific files
+xcuserdata/
+*.xcuserstate
+DerivedData/
