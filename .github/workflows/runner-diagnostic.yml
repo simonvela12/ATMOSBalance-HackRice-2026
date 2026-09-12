@@ -1,0 +1,14 @@
+name: Runner Diagnostic
+
+on:
+  push:
+    branches:
+      - product-v1.4-clean-integration
+  workflow_dispatch:
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Runner reached user code
+        run: echo "GitHub-hosted runner started successfully"
