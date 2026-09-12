@@ -98,7 +98,7 @@
 			knownRegions = (en, Base);
 			mainGroup = A40000000000000000000001;
 			packageReferences = (
-				C30000000000000000000001 /* XCLocalSwiftPackageReference "../../FinancialCore" */,
+				C30000000000000000000001 /* XCLocalSwiftPackageReference "../FinancialCore" */,
 			);
 			productRefGroup = A40000000000000000000003 /* Products */;
 			projectDirPath = "";
@@ -221,16 +221,16 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		C30000000000000000000001 /* XCLocalSwiftPackageReference "../../FinancialCore" */ = {
+		C30000000000000000000001 /* XCLocalSwiftPackageReference "../FinancialCore" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = ../../FinancialCore;
+			relativePath = ../FinancialCore;
 		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		C40000000000000000000001 /* FinancialCore */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = C30000000000000000000001 /* XCLocalSwiftPackageReference "../../FinancialCore" */;
+			package = C30000000000000000000001 /* XCLocalSwiftPackageReference "../FinancialCore" */;
 			productName = FinancialCore;
 		};
 /* End XCSwiftPackageProductDependency section */
