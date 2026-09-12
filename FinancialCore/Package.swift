@@ -8,15 +8,10 @@ let package = Package(
         .macOS(.v13)
     ],
     products: [
-        .library(name: "FinancialCore", targets: ["FinancialCore"]),
-        .executable(name: "FinancialCoreDemo", targets: ["FinancialCoreDemo"])
+        .library(name: "FinancialCore", targets: ["FinancialCore"])
     ],
     targets: [
         .target(name: "FinancialCore"),
-        .executableTarget(
-            name: "FinancialCoreDemo",
-            dependencies: ["FinancialCore"]
-        ),
         .testTarget(
             name: "FinancialCoreTests",
             dependencies: ["FinancialCore"]
