@@ -386,4 +386,75 @@ final class QualitativeProfileUpdaterTests: XCTestCase {
         XCTAssertEqual(unrelatedAfter?.amount, 75)
         XCTAssertEqual(recurring.count, 2)
     }
+
+    func testReserveDirectiveReplacesExistingRuleOnSameEffectiveDate() {
+        let profile = FinancialProfile(
+            currentCash: 1500,
+            asOfDate: asOfDate,
+            personalReserveSteps: [
+                PersonalReserveStep(
+                    effectiveDate: asOfDate,
+                    minimumCash: 500,
+                    note: "Existing reserve"
+                )
+            ]
+        )
+        let result = QualitativeParseResult(
+            originalText: "keep 700",
+            directives: [.setPersonalReserve(amount: 700, effectiveDate: asOfDate)],
+            missingFields: [],
+            matchedRules: ["personal-reserve"]
+        )
+
+        let application = QualitativeProfileUpdater.apply(
+            result,
+            to: profile,
+            context: QualitativeNoteContext(subject: .general),
+            through: horizon,
+            reserveNote: "Confirmed context",
+            calendar: calendar
+        )
+
+        XCTAssertTrue(application.didChange)
+        XCTAssertEqual(application.profile.personalReserveSteps.count, 1)
+        XCTAssertEqual(application.profile.personalReserveSteps.first?.minimumCash, 700)
+        XCTAssertEqual(
+            FinancialEngine.personalReserve(profile: application.profile, on: asOfDate),
+            700,
+            accuracy: 0.000_001
+        )
+    }
+
+    func testEquivalentReserveOnSameDateIsFinancialNoOp() {
+        let existing = PersonalReserveStep(
+            effectiveDate: asOfDate,
+            minimumCash: 500,
+            note: "Existing reserve"
+        )
+        let profile = FinancialProfile(
+            currentCash: 1500,
+            asOfDate: asOfDate,
+            personalReserveSteps: [existing]
+        )
+        let result = QualitativeParseResult(
+            originalText: "keep 500",
+            directives: [.setPersonalReserve(amount: 500, effectiveDate: asOfDate)],
+            missingFields: [],
+            matchedRules: ["personal-reserve"]
+        )
+
+        let application = QualitativeProfileUpdater.apply(
+            result,
+            to: profile,
+            context: QualitativeNoteContext(subject: .general),
+            through: horizon,
+            reserveNote: "Confirmed context",
+            calendar: calendar
+        )
+
+        XCTAssertFalse(application.didChange)
+        XCTAssertEqual(application.profile.personalReserveSteps.count, 1)
+        XCTAssertEqual(application.profile.personalReserveSteps.first?.id, existing.id)
+        XCTAssertEqual(application.profile.personalReserveSteps.first?.note, "Existing reserve")
+    }
 }

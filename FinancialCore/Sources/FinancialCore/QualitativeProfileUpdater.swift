@@ -186,10 +186,15 @@ public enum QualitativeProfileUpdater {
             note: reserveNote
         )
         if !reserveSteps.isEmpty {
-            let existing = updated.personalReserveSteps.filter { $0.note == reserveNote }
-            if !sameReserveSchedule(existing, reserveSteps) {
-                updated.personalReserveSteps.removeAll { $0.note == reserveNote }
-                updated.personalReserveSteps.append(contentsOf: reserveSteps)
+            let replacementDates = Set(reserveSteps.map(\.effectiveDate))
+            var candidate = updated.personalReserveSteps
+            candidate.removeAll {
+                $0.note == reserveNote || replacementDates.contains($0.effectiveDate)
+            }
+            candidate.append(contentsOf: reserveSteps)
+
+            if !sameFinancialReserveSchedule(updated.personalReserveSteps, candidate) {
+                updated.personalReserveSteps = candidate
                 didChange = true
             }
         }
@@ -303,7 +308,7 @@ public enum QualitativeProfileUpdater {
         }
     }
 
-    private static func sameReserveSchedule(
+    private static func sameFinancialReserveSchedule(
         _ lhs: [PersonalReserveStep],
         _ rhs: [PersonalReserveStep]
     ) -> Bool {
@@ -312,8 +317,7 @@ public enum QualitativeProfileUpdater {
         guard left.count == right.count else { return false }
         return zip(left, right).allSatisfy { a, b in
             a.effectiveDate == b.effectiveDate &&
-            abs(a.minimumCash - b.minimumCash) <= 0.000_001 &&
-            a.note == b.note
+            abs(a.minimumCash - b.minimumCash) <= 0.000_001
         }
     }
 
