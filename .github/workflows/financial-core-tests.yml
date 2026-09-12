@@ -1,0 +1,28 @@
+name: FinancialCore Tests
+
+on:
+  push:
+    branches: [lucas-math]
+    paths:
+      - "FinancialCore/**"
+      - ".github/workflows/financial-core-tests.yml"
+  pull_request:
+    paths:
+      - "FinancialCore/**"
+      - ".github/workflows/financial-core-tests.yml"
+
+jobs:
+  test-financial-core:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Run FinancialCore tests
+        run: swift test --package-path FinancialCore
+
+      - name: Run FinancialCore demo
+        run: swift run --package-path FinancialCore FinancialCoreDemo

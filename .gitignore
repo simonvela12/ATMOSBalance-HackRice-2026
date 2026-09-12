@@ -1,7 +1,17 @@
+# Python cache files from earlier prototypes
+__pycache__/
+*.pyc
+
+# macOS
 .DS_Store
-DerivedData/
-*.xcuserstate
+
+# Xcode user-specific files
 xcuserdata/
+*.xcuserstate
+DerivedData/
 *.moved-aside
 *.xccheckout
 *.xcscmblueprint
+
+# Swift Package Manager
+.build/
