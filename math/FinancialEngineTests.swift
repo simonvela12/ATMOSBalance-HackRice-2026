@@ -136,10 +136,115 @@ final class FinancialEngineTests: XCTestCase {
         let assessment = try FinancialEngine.assessPurchase(
             profile: profile,
             amount: 250,
-            purchaseDate: makeDate(2026, 9, 13)
+            purchaseDate: makeDate(2026, 9, 13),
+            planningHorizon: makeDate(2026, 10, 1),
+            calendar: calendar
         )
 
         XCTAssertEqual(assessment.status, .wait)
         XCTAssertEqual(assessment.shortfall, 50, accuracy: 0.001)
+    }
+
+    func testPurchaseChecksFutureBillsNotJustPurchaseDay() throws {
+        let profile = FinancialProfile(
+            currentCash: 1000,
+            protectedCash: 0,
+            safetyBuffer: 100,
+            asOfDate: makeDate(2026, 9, 12),
+            incomeEvents: [],
+            expenseEvents: [
+                ExpenseEvent(
+                    amount: 700,
+                    date: makeDate(2026, 9, 30),
+                    category: "Future bill"
+                )
+            ],
+            goals: []
+        )
+
+        let assessment = try FinancialEngine.assessPurchase(
+            profile: profile,
+            amount: 400,
+            purchaseDate: makeDate(2026, 9, 15),
+            planningHorizon: makeDate(2026, 10, 1),
+            calendar: calendar
+        )
+
+        XCTAssertEqual(assessment.safeToSpendOnPurchaseDate, 900, accuracy: 0.001)
+        XCTAssertEqual(assessment.minimumSafeToSpendThroughHorizon, 200, accuracy: 0.001)
+        XCTAssertEqual(assessment.status, .wait)
+        XCTAssertEqual(assessment.shortfall, 200, accuracy: 0.001)
+    }
+
+    func testUserExampleF1MustWaitWhenProtectedMoneyIncludesGoals() throws {
+        // Example supplied during HackRice brainstorming.
+        // Assumption for this test: the $8,800 protected amount ALREADY includes
+        // the Miami and October goals, so those goals must not be subtracted twice.
+        // As-of date is Sep 11, therefore the Sep 5 one-time friend repayment is past
+        // and is assumed to already be reflected in currentCash if it was received.
+        let profile = FinancialProfile(
+            currentCash: 9500,
+            protectedCash: 8800,
+            safetyBuffer: 150,
+            asOfDate: makeDate(2026, 9, 11),
+            incomeEvents: [
+                IncomeEvent(
+                    amount: 200,
+                    date: makeDate(2026, 9, 5),
+                    source: "Friend repayment",
+                    type: .oneTime,
+                    confidence: 0.9
+                )
+            ],
+            expenseEvents: [
+                ExpenseEvent(
+                    amount: 200,
+                    date: makeDate(2026, 10, 1),
+                    category: "Subscriptions"
+                ),
+                ExpenseEvent(
+                    amount: 150,
+                    date: makeDate(2026, 10, 15),
+                    category: "Miscellaneous"
+                )
+            ],
+            goals: [
+                Goal(
+                    name: "Miami",
+                    targetAmount: 1000,
+                    deadline: makeDate(2026, 11, 26),
+                    priority: .mandatory,
+                    alreadyProtected: true
+                ),
+                Goal(
+                    name: "Other goal",
+                    targetAmount: 600,
+                    deadline: makeDate(2026, 10, 25),
+                    priority: .mandatory,
+                    alreadyProtected: true
+                )
+            ]
+        )
+
+        let yearEnd = makeDate(2026, 12, 31)
+        let result = try FinancialEngine.forecast(profile: profile, targetDate: yearEnd)
+
+        XCTAssertEqual(result.expectedIncome, 0, accuracy: 0.001)
+        XCTAssertEqual(result.projectedBalance, 9150, accuracy: 0.001)
+        XCTAssertEqual(result.safeToSpend, 200, accuracy: 0.001)
+
+        let assessment = try FinancialEngine.assessPurchase(
+            profile: profile,
+            amount: 450,
+            purchaseDate: makeDate(2026, 9, 15),
+            planningHorizon: yearEnd,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(assessment.safeToSpendOnPurchaseDate, 550, accuracy: 0.001)
+        XCTAssertEqual(assessment.minimumSafeToSpendThroughHorizon, 200, accuracy: 0.001)
+        XCTAssertEqual(assessment.status, .wait)
+        XCTAssertEqual(assessment.shortfall, 250, accuracy: 0.001)
+        XCTAssertNil(assessment.recommendedDate)
     }
 }
