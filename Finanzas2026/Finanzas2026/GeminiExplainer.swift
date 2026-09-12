@@ -85,6 +85,16 @@ struct PurchaseVerdict {
             "Tightest day: \(Self.date(limitingDate))"
         ]
 
+        switch reason {
+        case .violatesProtectedGoal:
+            lines.append("The purchase would use money already protected for a must-happen goal.")
+        case .violatesMultipleHardConstraints:
+            lines.append("The purchase would cross more than one hard protection, which can include protected goals or cash minimums.")
+        case .preservesRecommendedBuffer, .usesSafetyBuffer,
+             .violatesPersonalReserve, .violatesInstitutionalMinimum:
+            break
+        }
+
         if shortfallToHardFloor > 0 {
             lines.append("Amount below the hard floor: \(Self.money.format(shortfallToHardFloor))")
         }
