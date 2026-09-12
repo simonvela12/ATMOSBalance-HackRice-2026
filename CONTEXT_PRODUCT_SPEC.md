@@ -36,8 +36,10 @@ Nothing that changes the plan should be applied silently. The app should interpr
 - Recurring expenses.
 - Future expenses not yet visible in bank data.
 - Reimbursements / shared expenses.
-- Partial reimbursement must be supported; reimbursement amount does not have to equal the original expense.
-- Temporary liquidity dips must remain visible even when a later reimbursement offsets the expense.
+- Partial reimbursement is confirmed: the user enters the **exact amount expected back** and the **expected repayment date**.
+- The reimbursement amount does not have to equal the original expense.
+- The original expense remains fully visible on its original date; the later repayment is represented separately so the temporary liquidity dip is preserved.
+- The app must not silently assume that 100% of a shared expense will be reimbursed.
 
 ### Goals
 
@@ -77,8 +79,9 @@ Examples:
 
 **Someone owes me**
 - Original transaction anchor
-- Amount expected back
-- Repayment date
+- Amount expected back — required and editable
+- Repayment date — required
+- Confirmation preview should show the original expense and the later reimbursement as separate dated cash-flow events
 
 **Future expense**
 - Amount
@@ -150,6 +153,7 @@ Confidence behavior:
 ## Confirmed decisions
 
 1. Uncertain income confidence uses quick presets plus a custom percentage: **Confirmed 100% / Likely 70% / Possible 30% / Custom %**.
+2. Reimbursements can be partial. The user must explicitly provide the **amount expected back** and **repayment date**; the app never assumes full reimbursement. The original expense and later repayment stay as separate dated events so temporary liquidity risk remains visible.
 
 ## Open decisions
 
