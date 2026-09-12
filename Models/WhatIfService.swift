@@ -52,7 +52,7 @@ struct GeminiWhatIfParser: WhatIfParsing {
     }
 
     func parseScenario(from text: String) async throws -> WhatIfScenario {
-        let today = Self.dayFormatter.string(from: Date())
+        let today = Self.formatDay(Date())
         let prompt = """
         Today is \(today).
 
@@ -95,12 +95,7 @@ struct GeminiWhatIfParser: WhatIfParsing {
         let payload = try JSONDecoder().decode(ScenarioPayload.self, from: scenarioData)
         guard payload.amount > 0 else { throw ServiceError.invalidScenario }
 
-        let date: Date?
-        if payload.intendedDate.isEmpty {
-            date = nil
-        } else {
-            date = Self.dayFormatter.date(from: payload.intendedDate)
-        }
+        let date = payload.intendedDate.isEmpty ? nil : Self.parseDay(payload.intendedDate)
 
         return WhatIfScenario(
             type: .purchase,
@@ -130,6 +125,23 @@ struct GeminiWhatIfParser: WhatIfParsing {
         ]
     }
 
+    private static func formatDay(_ date: Date) -> String {
+        makeDayFormatter().string(from: date)
+    }
+
+    private static func parseDay(_ text: String) -> Date? {
+        makeDayFormatter().date(from: text)
+    }
+
+    private static func makeDayFormatter() -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }
+
     private struct GeminiEnvelope: Decodable {
         let candidates: [Candidate]
 
@@ -151,15 +163,6 @@ struct GeminiWhatIfParser: WhatIfParsing {
         let amount: Double
         let intendedDate: String
     }
-
-    private static let dayFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter
-    }()
 }
 
 struct WhatIfEvaluator {
