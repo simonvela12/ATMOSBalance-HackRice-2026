@@ -32,16 +32,19 @@ public extension FinancialInsights {
                 through: effectiveDeadline,
                 calendar: calendar
             )
+            let status = healthStatus(for: horizon)
 
             return GoalPlanAssessment(
                 goal: goal,
-                status: healthStatus(for: horizon),
+                status: status,
                 effectiveDeadline: effectiveDeadline,
                 remainingAmount: goal.remainingAmount,
                 includedInBaseline: true,
                 shortfallToHardFloor: max(0, -horizon.minimumHardHeadroom),
                 shortfallToRecommendedFloor: max(0, -horizon.minimumRecommendedHeadroom),
-                tightestDate: horizon.tightestRecommendedDate,
+                tightestDate: status == .notSafe
+                    ? horizon.tightestHardDate
+                    : horizon.tightestRecommendedDate,
                 recommendedDate: nil
             )
 
