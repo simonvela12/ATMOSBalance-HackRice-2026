@@ -1,11 +1,8 @@
-name: Product V1 Tests
+name: Product Validation
 
 on:
   push:
     branches:
-      - product-v1-cleanup
-      - product-v1-cleanup-v2
-      - product-v1.2
       - product-v1.4-clean-integration
   workflow_dispatch:
 
