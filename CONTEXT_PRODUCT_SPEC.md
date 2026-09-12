@@ -49,6 +49,10 @@ The product must work well for college students and other users with sparse, irr
   - **Optimistic = maximum amount**
 - These min/expected/max scenario rules apply only to an income stream the user explicitly marked as recurring; they never create recurrence by themselves.
 - A non-recurring uncertain income can still use confidence without implying that similar future deposits will occur.
+- A future income can optionally have a **purpose / earmark**. Suggested purposes include **General support / Tuition / Rent / Travel / Other**.
+- Purpose is optional; if the user does not assign one, the income remains general cash.
+- Earmarked income still enters the dated cash path on the expected date, but the earmarked portion should not automatically become general Safe to Spend.
+- Earmarked funds should be associated with the relevant obligation or goal so the product can distinguish **cash on hand** from **cash actually free to spend**.
 
 Examples the model must support:
 
@@ -56,6 +60,7 @@ Examples the model must support:
 - `$800 on Sep 25`, likely 70%, and no other expected income afterward.
 - `$0 expected income for the next 3 months`.
 - `$3,000 family transfer on Dec 1`, one time.
+- `$3,000 family transfer on Dec 1 for tuition`, where the tuition-earmarked portion is not treated as general discretionary cash.
 - An irregular tutoring payment on one specific date without any implied next payment.
 
 ### Expenses
@@ -112,6 +117,7 @@ Examples:
 - Date
 - Confidence: Confirmed 100% / Likely 70% / Possible 30% / Custom %
 - Recurrence defaults to **No** unless the user explicitly chooses otherwise
+- Optional purpose: General support / Tuition / Rent / Travel / Other
 
 **Variable recurring income**
 - Expected amount — required
@@ -126,7 +132,9 @@ Examples:
 - Expected date
 - Confidence
 - Recurrence: No
+- Optional purpose: General support / Tuition / Rent / Travel / Other
 - Example: $3,000 from family on Dec 1
+- If purpose is Tuition, the confirmation preview should make clear that the funds are reserved for tuition rather than becoming fully discretionary Safe to Spend
 
 **Someone owes me**
 - Original transaction anchor
@@ -199,11 +207,12 @@ Confidence behavior:
 - Bank data and user context must remain distinguishable.
 - Never present demo/sample values as real linked-bank data.
 - Never silently infer recurrence from transaction history alone.
-- Never silently guess missing amount, date, cadence, or reimbursement amount.
+- Never silently guess missing amount, date, cadence, reimbursement amount, or purpose.
 - Preserve deterministic and explainable planning behavior.
 - Do not introduce opaque financial scores or probability claims beyond explicit user-provided confidence.
 - Zero-income periods are valid states, not missing data to be filled automatically.
 - Dated one-time income should affect the cash path only on and after its actual expected date.
+- An earmarked deposit can increase bank cash without increasing discretionary Safe to Spend by the same amount.
 
 ## Confirmed decisions
 
@@ -214,6 +223,7 @@ Confidence behavior:
 5. Variable recurring income uses a **required expected amount** plus an **optional minimum–maximum range**. The range is optional and should add precision without making the basic flow more complicated.
 6. For an explicitly recurring variable income with a supplied range, scenarios use **minimum / expected / maximum** directly: Conservative = minimum, Expected = expected, Optimistic = maximum.
 7. The entire income model is **event-based rather than salary-based**. The product must support long periods of zero income, one-time family transfers, isolated refunds, stipends, freelance payments, and other sparse/lumpy cash inflows without inventing recurrence.
+8. Future income can optionally be assigned a **purpose / earmark** such as General support, Tuition, Rent, Travel, or Other. Earmarked funds enter the dated cash balance but should not automatically inflate discretionary Safe to Spend; they remain associated with their intended obligation or goal.
 
 ## Open decisions
 
