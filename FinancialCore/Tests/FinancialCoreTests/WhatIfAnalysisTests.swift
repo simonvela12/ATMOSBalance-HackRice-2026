@@ -183,4 +183,36 @@ final class WhatIfAnalysisTests: XCTestCase {
         XCTAssertFalse(impact.worsened)
         XCTAssertTrue(result.worsenedGoals.isEmpty)
     }
+
+    func testWhatIfUsesLiquidBalanceBeforeAProtectedGoalDeadline() throws {
+        let asOf = date(2026, 9, 12)
+        let miami = Goal(
+            name: "Miami",
+            targetAmount: 1000,
+            deadline: date(2026, 12, 26),
+            priority: .mandatory,
+            flexibility: .low
+        )
+        let profile = FinancialProfile(
+            currentCash: 2350,
+            asOfDate: asOf,
+            goals: [miami],
+            spendingPolicy: SpendingPolicy(bufferWeeks: 0, manualMinimumBuffer: 0)
+        )
+
+        // The What-If horizon intentionally ends before Miami. The purchase still
+        // must not be allowed to consume Miami's protected $1,000.
+        let result = try FinancialInsights.analyzePurchaseWhatIf(
+            profile: profile,
+            amount: 1500,
+            purchaseDate: asOf,
+            planningHorizon: date(2026, 11, 30),
+            calendar: calendar
+        )
+
+        XCTAssertEqual(FinancialEngine.liquidCashToday(profile: profile), 1350, accuracy: 0.001)
+        XCTAssertEqual(result.purchaseAssessment.status, .notSafe)
+        XCTAssertEqual(result.purchaseAssessment.shortfallToHardFloor, 150, accuracy: 0.001)
+        XCTAssertEqual(result.purchaseExplanation.reason, .violatesProtectedGoal)
+    }
 }
