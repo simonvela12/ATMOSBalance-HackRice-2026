@@ -1,0 +1,9 @@
+.build/
+.swiftpm/
+work/
+.vscode/
+.finance-data/
+*.xcodeproj/
+xcuserdata/
+DerivedData/
+Secrets.xcconfig
