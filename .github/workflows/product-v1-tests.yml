@@ -11,8 +11,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  validate:
-    runs-on: macos-latest
+  core-tests:
+    name: Core tests
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -25,6 +26,13 @@ jobs:
 
       - name: Test FinancialCore engine
         run: swift test --package-path FinancialCore
+
+  ios-build:
+    name: iOS simulator build
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
 
       - name: Build iOS product shell
         run: |
