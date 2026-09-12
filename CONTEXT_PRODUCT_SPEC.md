@@ -36,6 +36,8 @@ The product must work well for college students and other users with sparse, irr
 - Recurring income.
 - Irregular / uncertain income.
 - Weekly, biweekly, and monthly recurrence only when explicitly provided or confirmed by the user.
+- Recurring income may have an **optional end date** when the user knows when the stream stops.
+- If a recurring income has no end date, it remains active only within the current planning horizon until the user edits or cancels it; the system must not invent a permanent lifetime recurrence.
 - Expected future income with amount, date, and confidence.
 - A future income date may be either an **exact date** or an optional **date window** when timing is uncertain.
 - Date windows use **earliest / expected / latest** dates. The user should not be forced to invent an exact day if they only know a likely period.
@@ -74,6 +76,7 @@ Examples the model must support:
 - `$0 expected income for the next 3 months`.
 - `$3,000 family transfer on Dec 1`, one time.
 - `$3,000 family transfer on Dec 1`, split as `$2,000 Tuition + $1,000 General support`.
+- `Campus job — $550 every 2 weeks through Dec 15`, after which no more occurrences are generated.
 - A Tuition earmark whose linked tuition obligation is later removed; the app asks whether to make the money general cash, reassign it, or keep it reserved.
 - An irregular tutoring payment on one specific date without any implied next payment.
 
@@ -83,6 +86,8 @@ Examples the model must support:
 - Cancelable or avoidable expenses.
 - Essential vs non-essential context.
 - Recurring expenses.
+- Recurring expenses may have an **optional end date** such as rent through the end of a semester, a temporary subscription, or a fixed payment plan.
+- Once the end date has passed, no new occurrences are generated.
 - Future expenses not yet visible in bank data are explicitly supported.
 - A future expense must capture: **amount, date, must-pay status, flexibility/cancelability, and recurrence**.
 - A future expense date may be exact or use an optional **earliest / expected / latest** date window.
@@ -125,6 +130,15 @@ Examples the model must support:
 - If merchant/service identity is ambiguous, the app should not suggest changing the recurring amount.
 - Even with a strong merchant match, the recurring rule is never modified silently; the user must confirm the update.
 
+### Recurrence lifecycle
+
+- Any explicitly recurring income or expense may have an **optional end date**.
+- Example: `Rent — $700 monthly, starts Sep 1, ends Dec 1` generates only the Sep, Oct, Nov, and Dec occurrences that satisfy the rule.
+- End dates are inclusive when they fall on an occurrence date.
+- If no end date is provided, the recurrence is open-ended only for modeling purposes and is materialized through the active planning horizon.
+- Editing or canceling a recurring rule changes future uncompleted occurrences only; historical linked bank transactions remain historical facts.
+- The app must never continue generating occurrences after an explicit end date.
+
 ### Goals
 
 - Goal amount and target date.
@@ -161,6 +175,7 @@ Examples:
 - Date: exact date OR optional Earliest / Expected / Latest window
 - Confidence: Confirmed 100% / Likely 70% / Possible 30% / Custom %
 - Recurrence defaults to **No** unless the user explicitly chooses otherwise
+- Optional recurrence end date if recurrence is enabled
 - Optional purpose allocation(s): General support / Tuition / Rent / Travel / Other
 - Multiple allocations are allowed, plus any unallocated remainder as general cash
 
@@ -168,6 +183,7 @@ Examples:
 - Expected amount — required
 - Recurrence: Weekly / Every 2 weeks / Monthly
 - First or next expected date
+- Optional end date
 - Optional advanced range: Minimum amount / Maximum amount
 - Example: expected $550 every 2 weeks, optionally $450 minimum and $650 maximum
 - Scenario mapping: Conservative $450 / Expected $550 / Optimistic $650
@@ -194,6 +210,7 @@ Examples:
 - Must pay? Yes / No
 - Can reduce or cancel? No / Maybe / Yes
 - Recurrence: No / Weekly / Every 2 weeks / Monthly
+- Optional recurrence end date when recurrence is enabled
 - Optional advanced range for variable costs: Minimum / Expected / Maximum
 - If a range exists, scenario mapping is Conservative = maximum, Expected = expected, Optimistic = minimum
 - If flexibility is **Maybe**, the full expected amount remains in the normal forecast until the user explicitly changes the plan
@@ -206,6 +223,7 @@ Do not initially expose every internal categorical field as technical metadata. 
 - Do you have to pay this? Yes / No
 - Could you reduce or cancel it? No / Maybe / Yes
 - Will it happen again? No / Weekly / Every 2 weeks / Monthly
+- If it repeats, does it stop on a known date? Optional
 
 Merchant/category classification can be suggested automatically and corrected by the user.
 
@@ -267,6 +285,7 @@ Confidence behavior:
 - Planned events and actual bank transactions must never be double-counted after the user confirms they represent the same real-world event.
 - Possible event matches may be suggested automatically, but completion/linking always requires explicit confirmation.
 - Recurring amount-update suggestions require a strong same-merchant/service match and always require user confirmation.
+- Explicit recurrence end dates are authoritative: no future occurrence may be generated after the end date.
 
 ## Confirmed decisions
 
@@ -284,6 +303,7 @@ Confidence behavior:
 12. Future income, expenses, and reimbursements may use an optional **Earliest / Expected / Latest** date window when timing is uncertain. Scenario timing is deterministic: for income, Conservative = latest and Optimistic = earliest; for expenses, Conservative = earliest and Optimistic = latest; Expected uses the expected date in both cases.
 13. When a real bank transaction appears to match a previously planned event, the app suggests the match and asks the user to confirm. Only after confirmation are the two linked and the planned event marked completed so it is not counted twice.
 14. A real transaction may trigger a recurring-expense amount update suggestion only when it is clearly the **same merchant/service** as the recurring rule. Amount/category similarity alone is insufficient, ambiguous matches do nothing, and the recurring amount changes only after explicit user confirmation.
+15. Explicitly recurring income and expenses may have an **optional end date**. No occurrence is generated after that date. If no end date exists, the recurrence is materialized only through the active planning horizon until the user edits or cancels it.
 
 ## Open decisions
 
