@@ -37,11 +37,11 @@ public enum QualitativeProfileUpdater {
         for directive in result.directives {
             switch directive {
             case .setIncomeType(let type):
-                guard let label else { break }
+                guard label != nil else { break }
 
                 var rewritten: [IncomeEvent] = []
                 for event in updated.incomeEvents {
-                    guard event.source == label else {
+                    guard matchesIncomeSeries(event, context: context) else {
                         rewritten.append(event)
                         continue
                     }
@@ -61,10 +61,10 @@ public enum QualitativeProfileUpdater {
                 updated.incomeEvents = rewritten
 
             case .setIrregularIncomeConfidence(let confidence):
-                guard let label else { break }
+                guard label != nil else { break }
                 let clamped = min(max(confidence, 0), 1)
                 updated.incomeEvents = updated.incomeEvents.map { event in
-                    guard event.source == label else { return event }
+                    guard matchesIncomeSeries(event, context: context) else { return event }
                     if event.type.rawValue != IncomeType.irregular.rawValue ||
                         abs(event.confidence - clamped) > 0.000_001 {
                         didChange = true
@@ -265,6 +265,10 @@ public enum QualitativeProfileUpdater {
         return abs(event.amount - referenceAmount) <= 0.000_001
     }
 
+    /// Income classification and confidence describe the selected income series. Amount narrows
+    /// the series when the caller has it so two deposits with the same bank/source label cannot
+    /// accidentally reclassify or delete each other. Label-only matching remains the fallback for
+    /// legacy callers that do not provide an amount.
     private static func matchesIncomeSeries(
         _ event: IncomeEvent,
         context: QualitativeNoteContext
