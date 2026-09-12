@@ -98,6 +98,47 @@ final class QualitativeProfileUpdaterTests: XCTestCase {
         XCTAssertEqual(application.profile.expenseEvents.first?.committed, false)
     }
 
+    func testExpenseDirectiveOnlyChangesSelectedTransaction() {
+        let selectedDate = calendar.date(from: DateComponents(year: 2026, month: 9, day: 30))!
+        let otherDate = calendar.date(from: DateComponents(year: 2026, month: 10, day: 15))!
+        let profile = FinancialProfile(
+            currentCash: 1000,
+            asOfDate: asOfDate,
+            expenseEvents: [
+                ExpenseEvent(amount: 25, date: selectedDate, category: "Dining", essential: true, committed: true),
+                ExpenseEvent(amount: 25, date: otherDate, category: "Dining", essential: true, committed: true)
+            ]
+        )
+        let result = QualitativeParseResult(
+            originalText: "I can skip this one",
+            directives: [.setExpenseCommitted(false), .setExpenseEssential(false)],
+            missingFields: [],
+            matchedRules: ["expense-not-committed", "expense-nonessential"]
+        )
+        let context = QualitativeNoteContext(
+            subject: .expense,
+            referenceAmount: 25,
+            referenceDate: selectedDate,
+            label: "Dining"
+        )
+
+        let application = QualitativeProfileUpdater.apply(
+            result,
+            to: profile,
+            context: context,
+            through: horizon,
+            calendar: calendar
+        )
+
+        let selected = application.profile.expenseEvents.first { $0.date == selectedDate }
+        let other = application.profile.expenseEvents.first { $0.date == otherDate }
+        XCTAssertTrue(application.didChange)
+        XCTAssertEqual(selected?.committed, false)
+        XCTAssertEqual(selected?.essential, false)
+        XCTAssertEqual(other?.committed, true)
+        XCTAssertEqual(other?.essential, true)
+    }
+
     func testIncomeTypeDirectiveActuallyChangesMatchingIncome() {
         let incomeDate = calendar.date(from: DateComponents(year: 2026, month: 9, day: 20))!
         let profile = FinancialProfile(
@@ -289,5 +330,60 @@ final class QualitativeProfileUpdaterTests: XCTestCase {
         XCTAssertTrue(application.didChange)
         XCTAssertEqual(future.count, 2)
         XCTAssertTrue(future.allSatisfy { !$0.essential && $0.committed })
+    }
+
+    func testRecurringExpensePreservesDifferentAmountWithSameCategory() {
+        let anchor = calendar.date(from: DateComponents(year: 2026, month: 9, day: 1))!
+        let unrelatedDate = calendar.date(from: DateComponents(year: 2026, month: 10, day: 15))!
+        let unrelated = ExpenseEvent(
+            amount: 75,
+            date: unrelatedDate,
+            category: "Streaming",
+            essential: true,
+            committed: true
+        )
+        let profile = FinancialProfile(
+            currentCash: 1000,
+            asOfDate: asOfDate,
+            expenseEvents: [
+                ExpenseEvent(
+                    amount: 20,
+                    date: anchor,
+                    category: "Streaming",
+                    essential: false,
+                    committed: false
+                ),
+                unrelated
+            ]
+        )
+        let result = QualitativeParseResult(
+            originalText: "monthly",
+            directives: [.setRecurrence(cadence: .monthly, firstDate: nil)],
+            missingFields: [],
+            matchedRules: ["expense-recurrence"]
+        )
+        let context = QualitativeNoteContext(
+            subject: .expense,
+            referenceAmount: 20,
+            referenceDate: anchor,
+            label: "Streaming"
+        )
+
+        let application = QualitativeProfileUpdater.apply(
+            result,
+            to: profile,
+            context: context,
+            through: horizon,
+            calendar: calendar
+        )
+
+        let unrelatedAfter = application.profile.expenseEvents.first { $0.id == unrelated.id }
+        let recurring = application.profile.expenseEvents.filter {
+            $0.date > asOfDate && abs($0.amount - 20) <= 0.000_001
+        }
+        XCTAssertTrue(application.didChange)
+        XCTAssertEqual(unrelatedAfter?.date, unrelatedDate)
+        XCTAssertEqual(unrelatedAfter?.amount, 75)
+        XCTAssertEqual(recurring.count, 2)
     }
 }

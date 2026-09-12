@@ -74,9 +74,8 @@ public enum QualitativeProfileUpdater {
                 }
 
             case .setExpenseCommitted(let committed):
-                guard let label else { break }
                 updated.expenseEvents = updated.expenseEvents.map { event in
-                    guard event.category == label else { return event }
+                    guard matchesSelectedExpense(event, context: context) else { return event }
                     if event.committed != committed {
                         didChange = true
                         return copy(event, committed: committed)
@@ -85,9 +84,8 @@ public enum QualitativeProfileUpdater {
                 }
 
             case .setExpenseEssential(let essential):
-                guard let label else { break }
                 updated.expenseEvents = updated.expenseEvents.map { event in
-                    guard event.category == label else { return event }
+                    guard matchesSelectedExpense(event, context: context) else { return event }
                     if event.essential != essential {
                         didChange = true
                         return copy(event, essential: essential)
@@ -141,13 +139,13 @@ public enum QualitativeProfileUpdater {
                 calendar: calendar
            ),
            !recurring.isEmpty,
-           let label {
+           label != nil {
             let existing = updated.incomeEvents.filter {
-                $0.source == label && $0.date > updated.asOfDate
+                $0.date > updated.asOfDate && matchesIncomeSeries($0, context: context)
             }
             if !sameIncomeSchedule(existing, recurring) {
                 updated.incomeEvents.removeAll {
-                    $0.source == label && $0.date > updated.asOfDate
+                    $0.date > updated.asOfDate && matchesIncomeSeries($0, context: context)
                 }
                 updated.incomeEvents.append(contentsOf: recurring)
                 didChange = true
@@ -155,11 +153,10 @@ public enum QualitativeProfileUpdater {
         }
 
         if context.subject == .expense,
-           let label {
+           label != nil {
             let template = matchingExpenseTemplate(
                 in: updated.expenseEvents,
-                label: label,
-                referenceDate: context.referenceDate
+                context: context
             )
             if let recurring = try? QualitativeDirectiveMaterializer.recurringExpenseEvents(
                 from: result,
@@ -172,11 +169,11 @@ public enum QualitativeProfileUpdater {
             ),
                !recurring.isEmpty {
                 let existing = updated.expenseEvents.filter {
-                    $0.category == label && $0.date > updated.asOfDate
+                    $0.date > updated.asOfDate && matchesExpenseSeries($0, context: context)
                 }
                 if !sameExpenseSchedule(existing, recurring) {
                     updated.expenseEvents.removeAll {
-                        $0.category == label && $0.date > updated.asOfDate
+                        $0.date > updated.asOfDate && matchesExpenseSeries($0, context: context)
                     }
                     updated.expenseEvents.append(contentsOf: recurring)
                     didChange = true
@@ -232,13 +229,52 @@ public enum QualitativeProfileUpdater {
         )
     }
 
+    /// Direct expense directives describe the selected transaction, not every transaction that
+    /// happens to share its display label/category. Reference date and amount narrow the target
+    /// when the caller has them; label-only matching remains the fallback for legacy callers.
+    private static func matchesSelectedExpense(
+        _ event: ExpenseEvent,
+        context: QualitativeNoteContext
+    ) -> Bool {
+        guard let label = context.label, event.category == label else { return false }
+
+        if let referenceDate = context.referenceDate, event.date != referenceDate {
+            return false
+        }
+        if let referenceAmount = context.referenceAmount,
+           abs(event.amount - referenceAmount) > 0.000_001 {
+            return false
+        }
+        return true
+    }
+
+    /// A generated recurring series is scoped by label and amount. This prevents confirming a
+    /// cadence for one selected transaction from deleting a different future event that happens
+    /// to use the same category/source label.
+    private static func matchesExpenseSeries(
+        _ event: ExpenseEvent,
+        context: QualitativeNoteContext
+    ) -> Bool {
+        guard let label = context.label, event.category == label else { return false }
+        guard let referenceAmount = context.referenceAmount else { return true }
+        return abs(event.amount - referenceAmount) <= 0.000_001
+    }
+
+    private static func matchesIncomeSeries(
+        _ event: IncomeEvent,
+        context: QualitativeNoteContext
+    ) -> Bool {
+        guard let label = context.label, event.source == label else { return false }
+        guard let referenceAmount = context.referenceAmount else { return true }
+        return abs(event.amount - referenceAmount) <= 0.000_001
+    }
+
     private static func matchingExpenseTemplate(
         in events: [ExpenseEvent],
-        label: String,
-        referenceDate: Date?
+        context: QualitativeNoteContext
     ) -> ExpenseEvent? {
-        let matches = events.filter { $0.category == label }
-        guard let referenceDate else { return matches.first }
+        let matches = events.filter { matchesExpenseSeries($0, context: context) }
+        guard let referenceDate = context.referenceDate else { return matches.first }
 
         return matches.min { lhs, rhs in
             abs(lhs.date.timeIntervalSince(referenceDate)) < abs(rhs.date.timeIntervalSince(referenceDate))
