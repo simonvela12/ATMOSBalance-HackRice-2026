@@ -25,7 +25,7 @@ struct WhatIfEngine {
             throw EngineError.missingAmount
         }
 
-        let name = extractName(from: trimmed, amount: amount)
+        let name = extractName(from: trimmed)
         let intendedDate = inferDate(from: trimmed, now: now, calendar: calendar)
 
         return WhatIfScenario(
@@ -52,10 +52,10 @@ struct WhatIfEngine {
 
         let explanation: String
         if isSafe {
-            explanation = "This fits inside your current safe-to-spend amount and leaves \(remaining.formatted(.currency(code: \"USD\").precision(.fractionLength(0)))) of discretionary room."
+            explanation = "This fits inside your current safe-to-spend amount and leaves \(money(remaining)) of discretionary room."
         } else {
             let shortfall = abs(remaining)
-            explanation = "This is \(shortfall.formatted(.currency(code: \"USD\").precision(.fractionLength(0)))) above your current safe-to-spend amount. Waiting protects the money already reserved for your plan."
+            explanation = "This is \(money(shortfall)) above your current safe-to-spend amount. Waiting protects the money already reserved for your plan."
         }
 
         return WhatIfResult(
@@ -92,14 +92,14 @@ struct WhatIfEngine {
         return nil
     }
 
-    private func extractName(from text: String, amount: Double) -> String {
-        let lower = text.lowercased()
+    private func extractName(from text: String) -> String {
         let prefixes = ["can i buy ", "can i afford ", "what if i buy ", "what if i spend on ", "should i buy "]
-
+        let lower = text.lowercased()
         var candidate = text
+
         for prefix in prefixes {
-            if let range = lower.range(of: prefix) {
-                candidate = String(text[range.upperBound...])
+            if lower.hasPrefix(prefix) {
+                candidate = String(text.dropFirst(prefix.count))
                 break
             }
         }
@@ -139,5 +139,9 @@ struct WhatIfEngine {
         }
 
         return nil
+    }
+
+    private func money(_ value: Double) -> String {
+        value.formatted(.currency(code: "USD").precision(.fractionLength(0)))
     }
 }
