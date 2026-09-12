@@ -369,3 +369,16 @@ private extension QualitativeIncomeInput.Kind {
         }
     }
 }
+
+// App-only compatibility keeps the legacy Context cadence explicit without
+// reintroducing an ambiguous overload inside FinancialCore itself.
+extension RecurrenceRule {
+    init(cadence: RecurrenceCadence, firstOccurrence: Date, endDate: Date? = nil, isPaused: Bool = false) {
+        self.init(
+            cadence: PlanningRecurrenceCadence(cadence),
+            firstOccurrence: firstOccurrence,
+            endDate: endDate,
+            isPaused: isPaused
+        )
+    }
+}

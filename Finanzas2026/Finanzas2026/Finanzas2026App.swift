@@ -18,7 +18,7 @@ private struct V2AppHost: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            ProductRootView()
+            ContentView()
 
             Button {
                 showingBankLink = true
@@ -60,41 +60,41 @@ private struct NessieConnectionSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    SecureField("Nessie API key", text: $apiKey)
+                    SecureField("Bank sandbox API key", text: $apiKey)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                     TextField("Customer ID", text: $customerID)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                 } header: {
-                    Text("Nessie sandbox")
+                    Text("Connect test bank")
                 } footer: {
-                    Text("Credentials stay on the device for this session and are never committed to the repository.")
+                    Text("These credentials stay on this device for the current session.")
                 }
 
                 Section("Status") {
                     switch bankStore.phase {
                     case .idle:
-                        Label("No linked bank loaded", systemImage: "link")
+                        Label("No bank connected", systemImage: "link")
                     case .loadingCache:
-                        Label("Loading saved bank history", systemImage: "externaldrive")
+                        Label("Loading saved bank activity", systemImage: "externaldrive")
                     case .connecting:
                         HStack {
                             ProgressView()
-                            Text("Connecting and syncing…")
+                            Text("Connecting and refreshing…")
                         }
                     case .connected:
-                        Label("Bank data connected", systemImage: "checkmark.circle.fill")
+                        Label("Bank connected", systemImage: "checkmark.circle.fill")
                             .foregroundStyle(.green)
-                    case .failed(let message):
-                        Label(message, systemImage: "exclamationmark.triangle.fill")
+                    case .failed:
+                        Label("The last refresh needs attention", systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange)
                     }
                 }
 
                 if bankStore.isLinked {
                     Section {
-                        Button("Refresh linked accounts") {
+                        Button("Refresh bank data") {
                             Task { await bankStore.refreshLinkedAccounts() }
                         }
                         .disabled(isConnecting)
