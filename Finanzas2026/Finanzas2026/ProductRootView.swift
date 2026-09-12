@@ -390,7 +390,7 @@ private struct ContextItem: Identifiable {
 }
 
 private struct ContextCard<Content: View>: View {
-    @ViewBuilder let content: Content
+    let content: Content
 
     init(@ViewBuilder content: () -> Content) {
         self.content = content()
