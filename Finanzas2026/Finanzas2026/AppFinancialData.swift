@@ -20,18 +20,26 @@ enum AppFinancialData {
         calendar.date(byAdding: .day, value: 79, to: date) ?? date
     }
 
-    static let tuitionID = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
-    static let miamiID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
-
     static func label(_ tx: FinanceCore.FinancialTransaction) -> String {
         let value = (tx.merchantName ?? tx.transactionDescription)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return value.isEmpty ? "Bank transaction" : value
     }
 
+    /// Builds the profile the engine reasons over.
+    ///
+    /// Everything here comes from somewhere real: past activity from the linked
+    /// bank, future activity and goals from what the user entered. There are no
+    /// sample bills, no placeholder goals and no assumed reserve — an account with
+    /// no user plan simply has none of those, and the forecast reflects that
+    /// honestly rather than inventing a story.
     static func profile(
         currentCash: Double?,
-        transactions: [FinanceCore.FinancialTransaction]
+        transactions: [FinanceCore.FinancialTransaction],
+        goals: [Goal] = [],
+        plannedIncome: [IncomeEvent] = [],
+        plannedExpenses: [ExpenseEvent] = [],
+        minimumCashReserve: Double? = nil
     ) -> FinancialProfile {
         let asOf = day(Date())
         let usable = transactions.filter {
@@ -57,35 +65,29 @@ enum AppFinancialData {
             )
         }
 
-        let scheduled = [
-            ExpenseEvent(amount: 900, date: calendar.date(byAdding: .day, value: 3, to: asOf) ?? asOf,
-                         category: "Rent", essential: true, committed: true),
-            ExpenseEvent(amount: 80, date: calendar.date(byAdding: .day, value: 6, to: asOf) ?? asOf,
-                         category: "Phone", essential: true, committed: true),
-            ExpenseEvent(amount: 25, date: calendar.date(byAdding: .day, value: 18, to: asOf) ?? asOf,
-                         category: "Streaming subscription", essential: false, committed: true)
-        ]
+        let reserveSteps: [PersonalReserveStep]
+        if let minimumCashReserve {
+            reserveSteps = [
+                PersonalReserveStep(
+                    effectiveDate: asOf,
+                    minimumCash: minimumCashReserve,
+                    note: "Reserve set by you"
+                )
+            ]
+        } else {
+            reserveSteps = []
+        }
 
         return FinancialProfile(
             currentCash: currentCash ?? 0,
             asOfDate: asOf,
-            personalReserveSteps: [
-                PersonalReserveStep(effectiveDate: asOf, minimumCash: 500,
-                                    note: "Confirmed personal reserve")
-            ],
+            personalReserveSteps: reserveSteps,
             institutionalMinimums: [],
-            incomeEvents: bankIncomes,
-            expenseEvents: bankExpenses + scheduled,
-            goals: [
-                Goal(id: tuitionID, name: "Tuition installment", targetAmount: 350,
-                     deadline: calendar.date(byAdding: .day, value: 16, to: asOf) ?? asOf,
-                     priority: .mandatory),
-                Goal(id: miamiID, name: "Miami", targetAmount: 900,
-                     deadline: calendar.date(byAdding: .day, value: 38, to: asOf) ?? asOf,
-                     priority: .flexible)
-            ],
+            incomeEvents: bankIncomes + plannedIncome,
+            expenseEvents: bankExpenses + plannedExpenses,
+            goals: goals,
             weeklySpendingHistory: history(usable, asOf),
-            spendingPolicy: SpendingPolicy(lookbackWeeks: 6, bufferWeeks: 2, manualMinimumBuffer: 200)
+            spendingPolicy: SpendingPolicy(lookbackWeeks: 6, bufferWeeks: 2, manualMinimumBuffer: 0)
         )
     }
 

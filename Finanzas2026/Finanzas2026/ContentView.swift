@@ -20,18 +20,91 @@ struct ContentView: View {
     @State private var deletedForecastDays: Set<String> = []
     @State private var excludedOccurrences: Set<String> = []
     @State private var occurrenceNameOverrides: [String: String] = [:]
+    @State private var minimumCashReserve: Double?
 
     /// Rebuilding the profile and the projected path is expensive, and the forecast
     /// views read `month` many times per render, so it is cached and refreshed only
     /// when the linked-bank data actually changes.
+    private var currentPlan: UserPlan {
+        UserPlan(
+            goals: goals,
+            entries: addedEntries,
+            minimumCashReserve: minimumCashReserve,
+            deletedForecastDays: deletedForecastDays,
+            excludedOccurrences: excludedOccurrences,
+            occurrenceNameOverrides: occurrenceNameOverrides
+        )
+    }
+
+    private func restorePlan() {
+        let plan = PlanPersistence.load()
+        goals = plan.goals
+        addedEntries = plan.entries
+        minimumCashReserve = plan.minimumCashReserve
+        deletedForecastDays = plan.deletedForecastDays
+        excludedOccurrences = plan.excludedOccurrences
+        occurrenceNameOverrides = plan.occurrenceNameOverrides
+    }
+
+    /// The user's own goals and scheduled entries, translated into the engine's
+    /// vocabulary. Goals the user adds are flexible by default; nothing is assumed
+    /// on their behalf.
+    private var engineGoals: [FinancialCore.Goal] {
+        goals.map { goal in
+            FinancialCore.Goal(
+                id: goal.id,
+                name: goal.name,
+                targetAmount: Double(goal.targetAmount),
+                amountAlreadyPaid: Double(goal.saved),
+                deadline: goal.targetDate,
+                priority: .flexible
+            )
+        }
+    }
+
+    private func plannedEvents(asOf: Date, horizon: Date)
+        -> (income: [IncomeEvent], expenses: [ExpenseEvent]) {
+        var income: [IncomeEvent] = []
+        var expenses: [ExpenseEvent] = []
+
+        for entry in addedEntries {
+            for date in entry.occurrenceDates(through: horizon) {
+                let day = AppFinancialData.day(date)
+                guard day >= asOf else { continue }
+                guard !excludedOccurrences.contains(entry.occurrenceKey(for: date)) else { continue }
+                let name = occurrenceNameOverrides[entry.occurrenceKey(for: date)] ?? entry.name
+
+                if entry.kind == .income {
+                    income.append(
+                        IncomeEvent(amount: Double(entry.amount), date: day,
+                                    source: name, type: .oneTime, confidence: 1)
+                    )
+                } else {
+                    expenses.append(
+                        ExpenseEvent(amount: Double(entry.amount), date: day,
+                                     category: name, essential: false, committed: true)
+                    )
+                }
+            }
+        }
+        return (income, expenses)
+    }
+
     private func rebuildLiveContext() {
         guard bankStore.isLinked else {
             liveContext = .empty
             return
         }
+        let asOf = AppFinancialData.day(Date())
+        let horizon = AppFinancialData.horizon(from: asOf)
+        let planned = plannedEvents(asOf: asOf, horizon: horizon)
         let profile = AppFinancialData.profile(
             currentCash: bankStore.totalAvailableCash,
-            transactions: bankStore.transactions
+            transactions: bankStore.transactions,
+            goals: engineGoals,
+            plannedIncome: planned.income,
+            plannedExpenses: planned.expenses,
+            minimumCashReserve: minimumCashReserve
         )
         let timeline = (try? FinancialInsights.cashFlowTimeline(
             profile: profile,
@@ -112,9 +185,16 @@ struct ContentView: View {
             .scrollIndicators(.hidden)
         }
         .preferredColorScheme(.dark)
-        .task { rebuildLiveContext() }
+        .task {
+            restorePlan()
+            rebuildLiveContext()
+        }
         .onChange(of: bankStore.accounts) { _, _ in rebuildLiveContext() }
         .onChange(of: bankStore.transactions) { _, _ in rebuildLiveContext() }
+        .onChange(of: currentPlan) { _, plan in
+            PlanPersistence.save(plan)
+            rebuildLiveContext()
+        }
         .animation(.easeInOut(duration: 0.45), value: selectedMonth)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             whatIfButton
@@ -1927,7 +2007,7 @@ private struct EntryCard<Content: View>: View {
     }
 }
 
-private enum EntryKind: String, CaseIterable, Identifiable {
+private enum EntryKind: String, CaseIterable, Identifiable, Codable {
     case payment
     case income
 
@@ -1936,7 +2016,7 @@ private enum EntryKind: String, CaseIterable, Identifiable {
     var symbol: String { self == .payment ? "arrow.up.right" : "arrow.down.left" }
 }
 
-private enum EntrySchedule: String, CaseIterable, Identifiable {
+private enum EntrySchedule: String, CaseIterable, Identifiable, Codable {
     case oneTime
     case recurring
 
@@ -1944,7 +2024,7 @@ private enum EntrySchedule: String, CaseIterable, Identifiable {
     var title: String { self == .oneTime ? "One-time" : "Recurring" }
 }
 
-private enum RepeatUnit: String, CaseIterable, Identifiable {
+private enum RepeatUnit: String, CaseIterable, Identifiable, Codable {
     case day
     case week
     case month
@@ -1955,7 +2035,7 @@ private enum RepeatUnit: String, CaseIterable, Identifiable {
     var plural: String { "\(rawValue.capitalized)s" }
 }
 
-private enum RepeatEnding: String, CaseIterable, Identifiable {
+private enum RepeatEnding: String, CaseIterable, Identifiable, Codable {
     case never
     case onDate
     case afterOccurrences
@@ -1971,7 +2051,7 @@ private enum RepeatEnding: String, CaseIterable, Identifiable {
     }
 }
 
-private struct FinancialGoal: Identifiable {
+private struct FinancialGoal: Identifiable, Codable, Equatable {
     let id: UUID
     var name: String
     let targetAmount: Int
@@ -1988,7 +2068,7 @@ private struct FinancialGoal: Identifiable {
 
 }
 
-private struct FinancialEntry: Identifiable {
+private struct FinancialEntry: Identifiable, Codable, Equatable {
     let id: UUID
     var name: String
     let kind: EntryKind
@@ -2382,6 +2462,51 @@ private struct BalancePoint: Identifiable {
 /// Marc's forecast UI is kept exactly as-is; this supplies the numbers it used to
 /// take from demo data. Recorded days come from linked-bank transactions, future
 /// days come from FinancialCore's projected cash path.
+/// Everything the user has told the app about their own plan: goals they added,
+/// entries they scheduled, and the cash they want left untouched.
+///
+/// Nothing here is seeded with example data. An account with no goals and no
+/// entries produces an empty plan, and the forecast shows only what the bank
+/// actually reports.
+private struct UserPlan: Codable, Equatable {
+    var goals: [FinancialGoal] = []
+    var entries: [FinancialEntry] = []
+    var minimumCashReserve: Double?
+    var deletedForecastDays: Set<String> = []
+    var excludedOccurrences: Set<String> = []
+    var occurrenceNameOverrides: [String: String] = [:]
+
+    static let empty = UserPlan()
+}
+
+private enum PlanPersistence {
+    private static var fileURL: URL {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return support
+            .appendingPathComponent("Finanzas2026", isDirectory: true)
+            .appendingPathComponent("user-plan.json")
+    }
+
+    static func load() -> UserPlan {
+        guard let data = try? Data(contentsOf: fileURL) else { return .empty }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return (try? decoder.decode(UserPlan.self, from: data)) ?? .empty
+    }
+
+    static func save(_ plan: UserPlan) {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? encoder.encode(plan) else { return }
+        try? FileManager.default.createDirectory(
+            at: fileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try? data.write(to: fileURL, options: .atomic)
+    }
+}
+
 private struct LiveFinancialContext {
     let profile: FinancialProfile?
     let transactions: [FinanceCore.FinancialTransaction]
@@ -2429,19 +2554,6 @@ private struct LiveFinancialContext {
             expenses: Int((outflow.reduce(0) { $0 + Double($1.amountMinorUnits) / 100 }).rounded()),
             incomeSource: Self.label(inflow),
             expenseSource: Self.label(outflow)
-        )
-    }
-
-    func scheduled(on date: Date) -> (income: Int, expenses: Int, incomeSource: String, expenseSource: String) {
-        guard let profile else { return (0, 0, "Nothing scheduled", "Nothing scheduled") }
-        let day = calendar.startOfDay(for: date)
-        let incomes = profile.incomeEvents.filter { calendar.isDate($0.date, inSameDayAs: day) }
-        let expenses = profile.expenseEvents.filter { calendar.isDate($0.date, inSameDayAs: day) }
-        return (
-            income: Int((incomes.reduce(0) { $0 + $1.adjustedAmount }).rounded()),
-            expenses: Int((expenses.reduce(0) { $0 + $1.amount }).rounded()),
-            incomeSource: Self.names(incomes.map(\.source)),
-            expenseSource: Self.names(expenses.map(\.category))
         )
     }
 
@@ -2498,13 +2610,6 @@ private struct LiveFinancialContext {
         return sorted.count > 1 ? "\(name) + \(sorted.count - 1) more" : name
     }
 
-    private static func names(_ values: [String]) -> String {
-        let cleaned = values
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        guard let first = cleaned.first else { return "Nothing scheduled" }
-        return cleaned.count > 1 ? "\(first) + \(cleaned.count - 1) more" : first
-    }
 }
 
 private enum MockForecast {
@@ -2674,10 +2779,8 @@ private enum MockForecast {
             // Recorded days come from the bank; today and future days come from
             // the profile's scheduled events on the engine's projected path.
             let bank = live.recorded(on: date)
-            let planned = status == .forecast ? live.scheduled(on: date) : (income: 0, expenses: 0, incomeSource: "Nothing scheduled", expenseSource: "Nothing scheduled")
-
-            let baseIncome = isExcluded ? 0 : bank.income + planned.income
-            let baseExpenses = isExcluded ? 0 : bank.expenses + planned.expenses
+            let baseIncome = isExcluded ? 0 : bank.income
+            let baseExpenses = isExcluded ? 0 : bank.expenses
 
             let matchingEntries = occurrences.filter {
                 Calendar.current.component(.day, from: $0.date) == day
@@ -2736,8 +2839,6 @@ private enum MockForecast {
                 incomeSource = customNames
             } else if bank.income > 0 {
                 incomeSource = bank.incomeSource
-            } else if planned.income > 0 {
-                incomeSource = planned.incomeSource
             } else {
                 incomeSource = status == .recorded ? "Nothing recorded" : "Nothing scheduled"
             }
@@ -2747,8 +2848,6 @@ private enum MockForecast {
                 expenseSource = customNames
             } else if bank.expenses > 0 {
                 expenseSource = bank.expenseSource
-            } else if planned.expenses > 0 {
-                expenseSource = planned.expenseSource
             } else {
                 expenseSource = status == .recorded ? "Nothing recorded" : "Nothing scheduled"
             }
