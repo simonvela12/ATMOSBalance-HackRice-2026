@@ -51,6 +51,11 @@ let whatIf = try FinancialInsights.analyzePurchaseWhatIf(
     purchaseDate: purchaseDate,
     planningHorizon: horizon
 )
+
+let diagnostics = FinancialProfileDiagnostics.report(
+    profile: profile,
+    planningHorizon: horizon
+)
 ```
 
 ## Core outputs
@@ -69,6 +74,7 @@ let whatIf = try FinancialInsights.analyzePurchaseWhatIf(
 - daily cash-flow points for a SwiftUI calendar/chart
 - recommended weekly spending limit
 - deterministic purchase reason codes for UI explanations
+- profile diagnostics for malformed or weak upstream data
 
 ## Core inputs
 
@@ -136,6 +142,63 @@ The UI can turn those deterministic outputs into plain-language copy. The math e
 
 The comparison is deterministic and based on the same cash-path rules as the purchase assessment.
 
+## Recurring cash flows
+
+One `IncomeEvent` or `ExpenseEvent` is one dated cash movement. A qualitative label saying that something is recurring does **not** automatically create future occurrences.
+
+The normalization layer can materialize weekly, biweekly, or monthly events with `FinancialScheduleBuilder`:
+
+```swift
+let paychecks = try FinancialScheduleBuilder.recurringIncome(
+    amount: 450,
+    firstDate: nextPayday,
+    through: horizon,
+    source: "Campus job",
+    cadence: .biweekly
+)
+
+let subscriptions = try FinancialScheduleBuilder.recurringExpense(
+    amount: 25,
+    firstDate: nextSubscriptionDate,
+    through: horizon,
+    category: "Subscription",
+    cadence: .monthly,
+    essential: false,
+    committed: true
+)
+```
+
+This is intentionally separate from the math engine: Simon's qualitative layer decides that a pattern repeats, then the schedule helper converts that meaning into dated events.
+
+See `QUALITATIVE_MAPPING.md` for the full mapping contract.
+
+## Profile diagnostics
+
+Before showing an affordability decision, the app can inspect the normalized profile:
+
+```swift
+let diagnostics = FinancialProfileDiagnostics.report(
+    profile: profile,
+    planningHorizon: horizon
+)
+
+if diagnostics.isReadyForForecast {
+    // Present deterministic engine outputs.
+}
+```
+
+Diagnostics surface issues such as:
+
+- negative or malformed normalized cash-flow amounts
+- irregular-income confidence outside `0...1`
+- duplicate reserve dates
+- invalid institutional-minimum ranges
+- missing or sparse recent spending history
+- overdue goals
+- long planning horizons that should be treated as rolling forecasts
+
+Warnings expose assumptions but do not block the engine. Errors indicate malformed upstream data that should be fixed before presenting a financial recommendation.
+
 ## Current MVP assumptions
 
 - past transactions are already reflected in current cash
@@ -156,14 +219,16 @@ The engine can mathematically evaluate long horizons, but normal-spending histor
 
 Long-term commitments can still be represented through reserve schedules and dated goals. Operational safe-to-spend recommendations should use a horizon for which the app has meaningful inputs rather than pretending six weeks of history perfectly predicts four years.
 
+`FinancialProfileDiagnostics.report(...)` uses a configurable operational-horizon warning threshold (default 180 days). It warns; it does not block longer forecasts.
+
 ## Validation status
 
 The package is continuously validated by GitHub Actions on macOS.
 
-Latest validated milestone after adding dashboard, timeline, purchase explanations, adaptive goal health, and goal-aware What-If analysis:
+Latest validated milestone after adding dashboard, timeline, purchase explanations, adaptive goal health, goal-aware What-If analysis, recurring schedule helpers, and profile diagnostics:
 
 - Apple Swift 6.3.3 on macOS runner
-- `31` XCTest tests
+- `40` XCTest tests
 - `0` failures
 - `FinancialCoreDemo` builds and runs successfully
 
