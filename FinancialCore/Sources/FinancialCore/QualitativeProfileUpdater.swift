@@ -34,10 +34,18 @@ public enum QualitativeProfileUpdater {
         var didChange = false
         let label = context.label
 
+        // When Context identifies a concrete bank transaction, income directives must remain
+        // anchored to that exact transaction. Otherwise a stale card could reclassify a different
+        // future deposit that happens to share the same source and amount.
+        let requiresIncomeAnchor = context.referenceDate != nil || context.referenceAmount != nil
+        let hasGroundedSelectedIncome = !requiresIncomeAnchor || profile.incomeEvents.contains {
+            matchesSelectedIncome($0, context: context)
+        }
+
         for directive in result.directives {
             switch directive {
             case .setIncomeType(let type):
-                guard label != nil else { break }
+                guard label != nil, hasGroundedSelectedIncome else { break }
 
                 var rewritten: [IncomeEvent] = []
                 for event in updated.incomeEvents {
@@ -61,7 +69,7 @@ public enum QualitativeProfileUpdater {
                 updated.incomeEvents = rewritten
 
             case .setIrregularIncomeConfidence(let confidence):
-                guard label != nil else { break }
+                guard label != nil, hasGroundedSelectedIncome else { break }
                 let clamped = min(max(confidence, 0), 1)
                 updated.incomeEvents = updated.incomeEvents.map { event in
                     guard matchesIncomeSeries(event, context: context) else { return event }
@@ -141,7 +149,7 @@ public enum QualitativeProfileUpdater {
             }
         }
 
-        let hasSelectedIncome = updated.incomeEvents.contains {
+        let hasSelectedIncome = hasGroundedSelectedIncome && updated.incomeEvents.contains {
             matchesSelectedIncome($0, context: context)
         }
         if context.subject == .income,

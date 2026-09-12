@@ -47,6 +47,52 @@ final class QualitativeIncomeGroundingTests: XCTestCase {
         XCTAssertTrue(application.profile.incomeEvents.isEmpty)
     }
 
+    func testStaleReferencedIncomeDoesNotReclassifyMatchingFutureDeposits() {
+        let staleReferenceDate = calendar.date(from: DateComponents(year: 2026, month: 9, day: 6))!
+        let futureDate = calendar.date(from: DateComponents(year: 2026, month: 9, day: 20))!
+        let futureDeposit = IncomeEvent(
+            amount: 650,
+            date: futureDate,
+            source: "Campus job",
+            type: .oneTime,
+            confidence: 1
+        )
+        let profile = FinancialProfile(
+            currentCash: 1_000,
+            asOfDate: asOfDate,
+            incomeEvents: [futureDeposit]
+        )
+        let result = QualitativeParseResult(
+            originalText: "This is recurring and I am only about 70% sure it arrives.",
+            directives: [
+                .setIncomeType(.recurring),
+                .setIrregularIncomeConfidence(0.7)
+            ],
+            missingFields: [],
+            matchedRules: ["income-recurring", "income-confidence"]
+        )
+        let context = QualitativeNoteContext(
+            subject: .income,
+            referenceAmount: 650,
+            referenceDate: staleReferenceDate,
+            label: "Campus job"
+        )
+
+        let application = QualitativeProfileUpdater.apply(
+            result,
+            to: profile,
+            context: context,
+            through: horizon,
+            calendar: calendar
+        )
+
+        XCTAssertFalse(application.didChange)
+        XCTAssertEqual(application.profile.incomeEvents.count, 1)
+        XCTAssertEqual(application.profile.incomeEvents[0].id, futureDeposit.id)
+        XCTAssertEqual(application.profile.incomeEvents[0].type, .oneTime)
+        XCTAssertEqual(application.profile.incomeEvents[0].confidence, 1, accuracy: 0.000_001)
+    }
+
     func testRecurringIncomeUsesReferencedBankTransactionAsAnchor() {
         let referenceDate = calendar.date(from: DateComponents(year: 2026, month: 9, day: 6))!
         let existing = IncomeEvent(
