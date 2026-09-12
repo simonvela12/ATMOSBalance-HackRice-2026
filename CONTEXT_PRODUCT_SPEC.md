@@ -24,8 +24,8 @@ Nothing that changes the plan should be applied silently. The app should interpr
 - Irregular / uncertain income.
 - Weekly, biweekly, and monthly recurrence.
 - Expected future income with amount, date, and confidence.
-- Confidence shortcuts: Confirmed, Likely, Possible.
-- Custom confidence should also be supported.
+- Confidence UX is confirmed as: **Confirmed 100% / Likely 70% / Possible 30% / Custom %**.
+- Custom confidence accepts an explicit user-entered percentage such as 55%, 65%, or 80%.
 - For irregular income, expected-value planning may use `amount × confidence` while scenario views can remain conservative / expected / optimistic.
 
 ### Expenses
@@ -73,7 +73,7 @@ Examples:
 **Expected income**
 - Amount
 - Date
-- Confidence: Confirmed / Likely / Possible / Custom
+- Confidence: Confirmed 100% / Likely 70% / Possible 30% / Custom %
 
 **Someone owes me**
 - Original transaction anchor
@@ -131,12 +131,11 @@ Income source kinds:
 - refund
 - other
 
-Confidence shortcuts currently map conceptually to:
+Confidence behavior:
 - confirmed = 100%
 - likely = 70%
 - possible = 30%
-
-Custom confidence is a desired addition.
+- custom = exact user-entered percentage
 
 ## Product principles
 
@@ -147,6 +146,10 @@ Custom confidence is a desired addition.
 - Never silently guess missing amount, date, cadence, or reimbursement amount.
 - Preserve deterministic and explainable planning behavior.
 - Do not introduce opaque financial scores or probability claims beyond explicit user-provided confidence.
+
+## Confirmed decisions
+
+1. Uncertain income confidence uses quick presets plus a custom percentage: **Confirmed 100% / Likely 70% / Possible 30% / Custom %**.
 
 ## Open decisions
 
