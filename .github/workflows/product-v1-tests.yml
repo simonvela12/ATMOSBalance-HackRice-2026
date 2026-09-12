@@ -6,6 +6,10 @@ on:
       - product-v1.4-clean-integration
   workflow_dispatch:
 
+concurrency:
+  group: product-validation-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   validate:
     runs-on: macos-latest
