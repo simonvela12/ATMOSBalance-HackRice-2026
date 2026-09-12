@@ -1,5 +1,6 @@
 import SwiftUI
 import Charts
+import FinanceCore
 import FinancialCore
 
 struct ContentView: View {
@@ -12,7 +13,7 @@ struct ContentView: View {
     @State private var financialModel = AppFinancialModel()
 
     private var month: MonthForecast {
-        MockForecast.data(for: selectedMonth)
+        MockForecast.data(for: selectedMonth, transactions: bankStore.transactions)
     }
 
     private var financialSnapshot: AppFinancialSnapshot {
@@ -27,11 +28,11 @@ struct ContentView: View {
     }
 
     private var displayedWeather: MoneyWeather {
-        selectedMonth == .august ? month.overallWeather : financialSnapshot.horizonStatus.moneyWeather
+        selectedMonth.isHistorical ? month.overallWeather : financialSnapshot.horizonStatus.moneyWeather
     }
 
     private var displayedBalance: Int {
-        selectedMonth == .august ? month.accountBalance : Int(financialSnapshot.projectedCash.rounded())
+        selectedMonth.isHistorical ? month.accountBalance : Int(financialSnapshot.projectedCash.rounded())
     }
 
     private var isInsightsPreview: Bool {
@@ -49,7 +50,7 @@ struct ContentView: View {
             return Array(month.days[todayIndex...].prefix(7))
         }
 
-        if selectedMonth == .august {
+        if selectedMonth.isHistorical {
             return Array(month.days.suffix(7))
         }
 
@@ -165,7 +166,7 @@ struct ContentView: View {
                 .tracking(-4)
                 .contentTransition(.numericText(value: Double(displayedBalance)))
 
-            Text(selectedMonth == .august ? month.balanceLabel : "FinancialCore projected balance")
+            Text(selectedMonth.isHistorical ? month.balanceLabel : "FinancialCore projected balance")
                 .font(.title3.weight(.medium))
                 .foregroundStyle(.white.opacity(0.9))
 
@@ -176,13 +177,13 @@ struct ContentView: View {
                         displayedWeather.primaryColor,
                         displayedWeather.secondaryColor
                     )
-                Text(selectedMonth == .august ? month.conditionTitle : financialSnapshot.horizonStatus.rawValue)
+                Text(selectedMonth.isHistorical ? month.conditionTitle : financialSnapshot.horizonStatus.rawValue)
                     .fontWeight(.semibold)
             }
             .font(.headline)
             .padding(.top, 6)
 
-            Text(selectedMonth == .august ? month.summary : "\(financialSnapshot.safeToSpendNow.formatted(.currency(code: "USD").precision(.fractionLength(0)))) safe to spend while preserving your reserve and commitments.")
+            Text(selectedMonth.isHistorical ? month.summary : "\(financialSnapshot.safeToSpendNow.formatted(.currency(code: "USD").precision(.fractionLength(0)))) safe to spend while preserving your reserve and commitments.")
                 .font(.subheadline)
                 .foregroundStyle(.white.opacity(0.68))
                 .multilineTextAlignment(.center)
@@ -782,7 +783,7 @@ private struct DayDetailSheet: View {
                         DetailRow(
                             icon: "equal",
                             title: "Net movement",
-                            subtitle: "Mock daily total",
+                            subtitle: "Daily total",
                             amount: day.formattedAmount
                         )
                     }
@@ -1299,6 +1300,13 @@ private struct AtmosphericBackground: View {
 }
 
 private enum ForecastMonth: Int, CaseIterable, Identifiable {
+    case january = 1
+    case february = 2
+    case march = 3
+    case april = 4
+    case may = 5
+    case june = 6
+    case july = 7
     case august = 8
     case september = 9
     case october = 10
@@ -1309,6 +1317,13 @@ private enum ForecastMonth: Int, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
+        case .january: return "January"
+        case .february: return "February"
+        case .march: return "March"
+        case .april: return "April"
+        case .may: return "May"
+        case .june: return "June"
+        case .july: return "July"
         case .august: return "August"
         case .september: return "September"
         case .october: return "October"
@@ -1323,13 +1338,15 @@ private enum ForecastMonth: Int, CaseIterable, Identifiable {
 
     var dayCount: Int {
         switch self {
-        case .august, .october, .december: return 31
-        case .september, .november: return 30
+        case .january, .march, .may, .july, .august, .october, .december: return 31
+        case .april, .june, .september, .november: return 30
+        case .february: return 28
         }
     }
 
     var mockWeather: MoneyWeather {
         switch self {
+        case .january, .february, .march, .april, .may, .june, .july: return .cloudy
         case .august: return .sunny
         case .september: return .partlySunny
         case .october: return .cloudy
@@ -1340,6 +1357,13 @@ private enum ForecastMonth: Int, CaseIterable, Identifiable {
 
     var previousName: String {
         switch self {
+        case .january: return "December"
+        case .february: return "January"
+        case .march: return "February"
+        case .april: return "March"
+        case .may: return "April"
+        case .june: return "May"
+        case .july: return "June"
         case .august: return "July"
         case .september: return "August"
         case .october: return "September"
@@ -1347,6 +1371,8 @@ private enum ForecastMonth: Int, CaseIterable, Identifiable {
         case .december: return "November"
         }
     }
+
+    var isHistorical: Bool { rawValue <= ForecastMonth.august.rawValue }
 
     var horizonDate: Date {
         var components = DateComponents()
@@ -1606,7 +1632,7 @@ private enum MockForecast {
         point("dec-close", 12, 28, 1973, .expected, true)
     ]
 
-    static func data(for month: ForecastMonth) -> MonthForecast {
+    static func data(for month: ForecastMonth, transactions: [FinanceCore.FinancialTransaction] = []) -> MonthForecast {
         let overview: (
             balance: Int,
             balanceLabel: String,
@@ -1619,6 +1645,23 @@ private enum MockForecast {
         )
 
         switch month {
+        case .january, .february, .march, .april, .may, .june, .july:
+            let monthTransactions = transactions.filter {
+                let parts = Calendar(identifier: .gregorian).dateComponents([.year, .month], from: $0.transactionDate)
+                return parts.year == 2026 && parts.month == month.rawValue
+            }
+            let net = monthTransactions.reduce(Int64(0)) { $0 + $1.signedAmountMinorUnits }
+            let spending = monthTransactions.filter { $0.direction == .outflow }.reduce(Int64(0)) { $0 + $1.amountMinorUnits }
+            overview = (
+                Int(net / 100),
+                transactions.isEmpty ? "Demo monthly movement" : "Nessie net movement",
+                weather(for: Int(net / 100)),
+                monthTransactions.isEmpty ? "No activity" : "Recorded activity",
+                transactions.isEmpty ? "Connect Nessie to inspect this month’s bank history." : "Showing \(monthTransactions.count) normalized Nessie transactions from this month.",
+                Double(spending) / 100 / Double(month.dayCount),
+                0,
+                0
+            )
         case .august:
             overview = (1530, "Closing account balance", .sunny, "Clear", "Income comfortably covered scheduled bills and everyday spending.", 34.60, 7, 4)
         case .september:
@@ -1641,18 +1684,25 @@ private enum MockForecast {
             averageDailySpending: overview.averageSpending,
             previousMonthDelta: overview.previousDelta,
             allTimeDelta: overview.allTimeDelta,
-            days: makeDays(for: month)
+            days: makeDays(for: month, transactions: transactions)
         )
     }
 
-    private static func makeDays(for month: ForecastMonth) -> [ForecastDay] {
+    private static func makeDays(for month: ForecastMonth, transactions: [FinanceCore.FinancialTransaction]) -> [ForecastDay] {
         (1...month.dayCount).map { day in
-            let amount = mockAmount(month: month, day: day)
+            let dayTransactions = transactions.filter {
+                let parts = Calendar(identifier: .gregorian).dateComponents([.year, .month, .day], from: $0.transactionDate)
+                return parts.year == 2026 && parts.month == month.rawValue && parts.day == day
+            }
+            let useBankHistory = !transactions.isEmpty && month.isHistorical
+            let bankAmount = Int(dayTransactions.reduce(Int64(0)) { $0 + $1.signedAmountMinorUnits } / 100)
+            let amount = useBankHistory ? bankAmount : mockAmount(month: month, day: day)
             let weather = weather(for: amount)
             let status = status(for: month, day: day)
             let routineSpending = 18 + ((day * 7) % 38)
-            let income = amount > 0 ? amount + routineSpending : 0
-            let expenses = amount > 0 ? routineSpending : abs(amount)
+            let income = useBankHistory ? Int(dayTransactions.filter { $0.direction == .inflow }.reduce(Int64(0)) { $0 + $1.amountMinorUnits } / 100) : (amount > 0 ? amount + routineSpending : 0)
+            let expenses = useBankHistory ? Int(dayTransactions.filter { $0.direction == .outflow }.reduce(Int64(0)) { $0 + $1.amountMinorUnits } / 100) : (amount > 0 ? routineSpending : abs(amount))
+            let sources = dayTransactions.compactMap { $0.merchantName ?? $0.transactionDescription }.prefix(2).joined(separator: ", ")
 
             return ForecastDay(
                 id: "\(month.rawValue)-\(day)",
@@ -1664,8 +1714,8 @@ private enum MockForecast {
                 status: status,
                 income: income,
                 expenses: expenses,
-                incomeSource: income == 0 ? "Nothing scheduled" : (income >= 300 ? "Campus job deposit" : "Transfer or side income"),
-                expenseSource: expenses == 0 ? "Nothing scheduled" : (expenses >= 300 ? "Rent and scheduled bills" : "Dining, transit, and daily spending")
+                incomeSource: useBankHistory ? (sources.isEmpty ? "Nessie deposit" : sources) : (income == 0 ? "Nothing scheduled" : (income >= 300 ? "Campus job deposit" : "Transfer or side income")),
+                expenseSource: useBankHistory ? (sources.isEmpty ? "Nessie transaction" : sources) : (expenses == 0 ? "Nothing scheduled" : (expenses >= 300 ? "Rent and scheduled bills" : "Dining, transit, and daily spending"))
             )
         }
     }
@@ -1691,7 +1741,7 @@ private enum MockForecast {
     }
 
     private static func status(for month: ForecastMonth, day: Int) -> DayStatus {
-        if month == .august { return .recorded }
+        if month.isHistorical { return .recorded }
         if month == .september {
             if day < 11 { return .recorded }
             if day == 11 { return .today }
