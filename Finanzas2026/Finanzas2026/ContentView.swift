@@ -1,14 +1,29 @@
 import SwiftUI
 import Charts
+import FinancialCore
 
 struct ContentView: View {
     @State private var selectedMonth = ForecastMonth.september
     @State private var selectedDay: ForecastDay?
     @State private var showingAffordability = false
     @State private var showingFullMonth = false
+    @State private var showingIntegrationControls = false
+    @State private var financialModel = AppFinancialModel()
 
     private var month: MonthForecast {
         MockForecast.data(for: selectedMonth)
+    }
+
+    private var financialSnapshot: AppFinancialSnapshot {
+        try! financialModel.snapshot(through: selectedMonth.horizonDate)
+    }
+
+    private var displayedWeather: MoneyWeather {
+        selectedMonth == .august ? month.overallWeather : financialSnapshot.horizonStatus.moneyWeather
+    }
+
+    private var displayedBalance: Int {
+        selectedMonth == .august ? month.accountBalance : Int(financialSnapshot.projectedCash.rounded())
     }
 
     private var isInsightsPreview: Bool {
@@ -35,7 +50,7 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            AtmosphericBackground(weather: month.overallWeather)
+            AtmosphericBackground(weather: displayedWeather)
 
             ScrollView {
                 VStack(spacing: 0) {
@@ -70,10 +85,19 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showingAffordability) {
             AffordabilitySheet(
-                accountBalance: month.accountBalance,
-                startingWeather: month.overallWeather
+                model: financialModel,
+                planningHorizon: selectedMonth.horizonDate,
+                startingWeather: displayedWeather
             )
             .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showingIntegrationControls) {
+            IntegrationControlsSheet(
+                model: $financialModel,
+                planningHorizon: selectedMonth.horizonDate
+            )
+            .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
     }
@@ -108,7 +132,7 @@ struct ContentView: View {
                 .padding(.vertical, 6)
                 .background(.white.opacity(0.12), in: Capsule())
 
-            Button(action: {}) {
+            Button { showingIntegrationControls = true } label: {
                 Image(systemName: "person.crop.circle.fill")
                     .font(.system(size: 30))
                     .symbolRenderingMode(.hierarchical)
@@ -127,29 +151,29 @@ struct ContentView: View {
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(.white.opacity(0.82))
 
-            Text("$\(month.accountBalance.formatted(.number.grouping(.automatic)))")
+            Text("$\(displayedBalance.formatted(.number.grouping(.automatic)))")
                 .font(.system(size: 74, weight: .thin, design: .rounded))
                 .tracking(-4)
-                .contentTransition(.numericText(value: Double(month.accountBalance)))
+                .contentTransition(.numericText(value: Double(displayedBalance)))
 
-            Text(month.balanceLabel)
+            Text(selectedMonth == .august ? month.balanceLabel : "FinancialCore projected balance")
                 .font(.title3.weight(.medium))
                 .foregroundStyle(.white.opacity(0.9))
 
             HStack(spacing: 8) {
-                Image(systemName: month.overallWeather.symbol)
+                Image(systemName: displayedWeather.symbol)
                     .symbolRenderingMode(.palette)
                     .foregroundStyle(
-                        month.overallWeather.primaryColor,
-                        month.overallWeather.secondaryColor
+                        displayedWeather.primaryColor,
+                        displayedWeather.secondaryColor
                     )
-                Text(month.conditionTitle)
+                Text(selectedMonth == .august ? month.conditionTitle : financialSnapshot.horizonStatus.rawValue)
                     .fontWeight(.semibold)
             }
             .font(.headline)
             .padding(.top, 6)
 
-            Text(month.summary)
+            Text(selectedMonth == .august ? month.summary : "\(financialSnapshot.safeToSpendNow.formatted(.currency(code: "USD").precision(.fractionLength(0)))) safe to spend while preserving your reserve and commitments.")
                 .font(.subheadline)
                 .foregroundStyle(.white.opacity(0.68))
                 .multilineTextAlignment(.center)
@@ -324,7 +348,7 @@ struct ContentView: View {
     }
 
     private var spendingMetrics: some View {
-        SpendingMetricsCard(month: month)
+        SpendingMetricsCard(month: month, snapshot: financialSnapshot)
             .padding(.horizontal, 20)
             .padding(.top, 16)
     }
@@ -584,47 +608,39 @@ private struct ChartLegendItem: View {
 
 private struct SpendingMetricsCard: View {
     let month: MonthForecast
-
-    private var scheduledChanges: Int {
-        month.days.filter { $0.amount != 0 }.count
-    }
-
-    private var quietDays: Int {
-        month.days.count - scheduledChanges
-    }
+    let snapshot: AppFinancialSnapshot
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("SPENDING CLIMATE")
+                Text("FINANCIALCORE OUTLOOK")
                     .font(.caption.weight(.bold))
                     .tracking(1.2)
                     .foregroundStyle(.white.opacity(0.62))
-                Text("Average daily spending")
+                Text("Safe to spend now")
                     .font(.title3.weight(.semibold))
             }
 
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(month.averageDailySpending, format: .currency(code: "USD").precision(.fractionLength(2)))
+                Text(snapshot.safeToSpendNow, format: .currency(code: "USD").precision(.fractionLength(0)))
                     .font(.system(size: 42, weight: .light, design: .rounded))
                     .monospacedDigit()
-                Text("per day")
+                Text("through \(month.month.displayName)")
                     .font(.subheadline)
                     .foregroundStyle(.white.opacity(0.5))
             }
 
-            HStack(spacing: 8) {
-                ComparisonChip(delta: month.previousMonthDelta, label: "vs \(month.month.previousName)")
-                ComparisonChip(delta: month.allTimeDelta, label: "vs all-time")
-            }
+            Text("Recommended weekly limit: \(snapshot.recommendedWeeklySpendingLimit.formatted(.currency(code: "USD").precision(.fractionLength(0))))")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.72))
 
             Divider().overlay(.white.opacity(0.12))
 
             HStack(spacing: 0) {
                 MiniMetric(
-                    icon: "calendar.badge.clock",
-                    value: "\(scheduledChanges)",
-                    label: "scheduled changes"
+                    icon: "arrow.down.left",
+                    value: snapshot.expectedIncome.formatted(.currency(code: "USD").precision(.fractionLength(0))),
+                    label: "expected income"
                 )
 
                 Divider()
@@ -632,9 +648,9 @@ private struct SpendingMetricsCard: View {
                     .frame(height: 42)
 
                 MiniMetric(
-                    icon: "moon.stars.fill",
-                    value: "\(quietDays)",
-                    label: "no-change days"
+                    icon: "arrow.up.right",
+                    value: snapshot.committedExpenses.formatted(.currency(code: "USD").precision(.fractionLength(0))),
+                    label: "committed expenses"
                 )
             }
         }
@@ -815,6 +831,134 @@ private struct DetailRow: View {
 }
 
 private struct AffordabilitySheet: View {
+    let model: AppFinancialModel
+    let planningHorizon: Date
+    let startingWeather: MoneyWeather
+
+    @State private var amountText = ""
+    @State private var result: AppPurchaseResult?
+    @State private var errorText: String?
+    @FocusState private var amountIsFocused: Bool
+
+    private var purchaseAmount: Double? {
+        Double(amountText.filter { $0.isNumber || $0 == "." })
+    }
+
+    private var resultWeather: MoneyWeather {
+        result?.status.moneyWeather ?? startingWeather
+    }
+
+    private var resultTitle: String {
+        switch result?.status {
+        case .safe: "Forecast stays clear"
+        case .tight: "Possible, but tight"
+        case .notSafe: "Not safe right now"
+        case nil: "Try a purchase"
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: resultWeather.backgroundColors,
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+
+            ScrollView {
+                VStack(spacing: 22) {
+                    Text("PURCHASE OUTLOOK")
+                        .font(.caption.weight(.bold))
+                        .tracking(1.4)
+                        .foregroundStyle(.white.opacity(0.62))
+                        .padding(.top, 16)
+
+                    Image(systemName: resultWeather.symbol)
+                        .font(.system(size: 70, weight: .medium))
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(resultWeather.primaryColor, resultWeather.secondaryColor)
+                        .contentTransition(.symbolEffect(.replace))
+
+                    VStack(spacing: 7) {
+                        Text(resultTitle)
+                            .font(.title.bold())
+
+                        if let result {
+                            Text(result.status.rawValue)
+                                .font(.headline.bold())
+                                .tracking(1.2)
+                            Text("\(result.projectedCashAfterPurchase.formatted(.currency(code: "USD").precision(.fractionLength(0)))) at the limiting point")
+                                .foregroundStyle(.white.opacity(0.72))
+                            Text("Reason: \(result.reason.displayName) · \(result.limitingDate.formatted(date: .abbreviated, time: .omitted))")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.58))
+                                .multilineTextAlignment(.center)
+                        } else {
+                            Text("FinancialCore checks the full cash-flow horizon, reserve and buffer—not just today’s balance.")
+                                .font(.subheadline)
+                                .foregroundStyle(.white.opacity(0.68))
+                                .multilineTextAlignment(.center)
+                                .frame(maxWidth: 310)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Can I spend…")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.72))
+
+                        HStack(spacing: 6) {
+                            Text("$").foregroundStyle(.white.opacity(0.5))
+                            TextField("450", text: $amountText)
+                                .keyboardType(.decimalPad)
+                                .focused($amountIsFocused)
+                                .onChange(of: amountText) { _, _ in result = nil }
+                        }
+                        .font(.system(size: 42, weight: .semibold, design: .rounded))
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 14)
+                        .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+
+                        Button("Run FinancialCore") {
+                            guard let purchaseAmount, purchaseAmount > 0 else { return }
+                            amountIsFocused = false
+                            do {
+                                result = try model.assessPurchase(amount: purchaseAmount, through: planningHorizon)
+                                errorText = nil
+                            } catch {
+                                errorText = String(describing: error)
+                            }
+                        }
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 15)
+                        .foregroundStyle(Color.deepNavy)
+                        .background(.white, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+                        .disabled((purchaseAmount ?? 0) <= 0)
+                    }
+                    .padding(18)
+                    .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+
+                    if let errorText {
+                        Text(errorText).font(.caption).foregroundStyle(.red)
+                    }
+
+                    Label("Deterministic FinancialCore result", systemImage: "checkmark.shield")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.52))
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 28)
+            }
+            .scrollIndicators(.hidden)
+        }
+        .preferredColorScheme(.dark)
+        .animation(.easeInOut(duration: 0.45), value: resultWeather)
+    }
+}
+
+private struct LegacyAffordabilitySheet: View {
     let accountBalance: Int
     let startingWeather: MoneyWeather
 
@@ -954,6 +1098,51 @@ private struct AffordabilitySheet: View {
     }
 }
 
+private struct IntegrationControlsSheet: View {
+    @Binding var model: AppFinancialModel
+    let planningHorizon: Date
+
+    private var snapshot: AppFinancialSnapshot {
+        try! model.snapshot(through: planningHorizon)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Qualitative decisions") {
+                    Toggle("Expense is essential / committed", isOn: $model.optionalExpenseIsCommitted)
+                    Toggle("Goal is mandatory", isOn: $model.goalIsMandatory)
+                }
+
+                Section("FinancialCore result") {
+                    LabeledContent("Projected cash") {
+                        Text(snapshot.projectedCash, format: .currency(code: "USD").precision(.fractionLength(0)))
+                    }
+                    LabeledContent("Safe to spend") {
+                        Text(snapshot.safeToSpendNow, format: .currency(code: "USD").precision(.fractionLength(0)))
+                    }
+                    LabeledContent("Current", value: snapshot.currentStatus.rawValue)
+                    LabeledContent("Horizon", value: snapshot.horizonStatus.rawValue)
+                    LabeledContent("Mandatory goals") {
+                        Text(snapshot.mandatoryGoals, format: .currency(code: "USD").precision(.fractionLength(0)))
+                    }
+                }
+
+                Section("Mapped income") {
+                    Text("Recurring income enters at full value. Irregular income enters as amount × confidence; the demo maps $300 tutoring at 70% to $210.")
+                        .font(.footnote)
+                }
+
+                Section("Integration note") {
+                    Text("These controls change qualitative inputs only. SAFE, TIGHT and NOT_SAFE always come from FinancialCore.")
+                        .font(.footnote)
+                }
+            }
+            .navigationTitle("Financial profile")
+        }
+    }
+}
+
 private struct AtmosphericBackground: View {
     let weather: MoneyWeather
 
@@ -1053,6 +1242,15 @@ private enum ForecastMonth: Int, CaseIterable, Identifiable {
         case .november: return "October"
         case .december: return "November"
         }
+    }
+
+    var horizonDate: Date {
+        var components = DateComponents()
+        components.calendar = Calendar(identifier: .gregorian)
+        components.year = 2026
+        components.month = rawValue
+        components.day = dayCount
+        return components.date ?? Date(timeIntervalSince1970: 0)
     }
 }
 
@@ -1174,6 +1372,38 @@ private enum MoneyWeather: String {
         case .cloudy: return Color.cloudSilver
         case .rain: return Color.rainMist
         case .storm: return Color.stormLavender
+        }
+    }
+}
+
+private extension FinancialHealthStatus {
+    var moneyWeather: MoneyWeather {
+        switch self {
+        case .safe: .sunny
+        case .tight: .rain
+        case .notSafe: .storm
+        }
+    }
+}
+
+private extension PurchaseStatus {
+    var moneyWeather: MoneyWeather {
+        switch self {
+        case .safe: .sunny
+        case .tight: .rain
+        case .notSafe: .storm
+        }
+    }
+}
+
+private extension PurchaseDecisionReason {
+    var displayName: String {
+        switch self {
+        case .preservesRecommendedBuffer: "Preserves the recommended buffer"
+        case .usesSafetyBuffer: "Uses part of the safety buffer"
+        case .violatesPersonalReserve: "Would cross the personal reserve"
+        case .violatesInstitutionalMinimum: "Would cross an account minimum"
+        case .violatesMultipleHardConstraints: "Would cross multiple hard constraints"
         }
     }
 }
