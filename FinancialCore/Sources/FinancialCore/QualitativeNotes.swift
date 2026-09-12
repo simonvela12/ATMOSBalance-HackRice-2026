@@ -61,22 +61,13 @@ public struct QualitativeParseResult: Sendable {
         self.matchedRules = matchedRules
     }
 
-    public var recognizedSomething: Bool {
-        !matchedRules.isEmpty
-    }
-
-    public var isActionable: Bool {
-        !directives.isEmpty && missingFields.isEmpty
-    }
+    public var recognizedSomething: Bool { !matchedRules.isEmpty }
+    public var isActionable: Bool { !directives.isEmpty && missingFields.isEmpty }
 }
 
-/// A deterministic, local interpreter for the app's free-text "miscellaneous context" box.
-///
-/// It intentionally does not try to understand arbitrary prose. It recognizes a compact set
-/// of financially meaningful phrases and converts them into structured directives that the
-/// app can show back to the user for confirmation before changing `FinancialProfile` inputs.
-///
-/// This keeps affordability decisions auditable and avoids requiring an LLM or network call.
+/// Deterministic, local interpreter for the app's qualitative context box.
+/// It recognizes a deliberately small set of financially meaningful phrases and never
+/// invents missing financial inputs. The UI must show directives back to the user before apply.
 public enum QualitativeNoteInterpreter {
     public static func parse(
         _ rawText: String,
@@ -169,13 +160,8 @@ public enum QualitativeNoteInterpreter {
 
         if context.subject == .general && containsAny(text, reservePhrases) {
             matchedRules.append("personal-reserve")
-            if let amount = extractMoneyAmount(from: text) {
-                directives.append(
-                    .setPersonalReserve(
-                        amount: amount,
-                        effectiveDate: parsedDate ?? asOfDate
-                    )
-                )
+            if let amount = extractReserveAmount(from: text) {
+                directives.append(.setPersonalReserve(amount: amount, effectiveDate: parsedDate ?? asOfDate))
             } else {
                 missingFields.append(.reserveAmount)
             }
@@ -189,341 +175,183 @@ public enum QualitativeNoteInterpreter {
         )
     }
 
-    // MARK: - Phrase catalog
-
     private static let reimbursementPhrases = [
-        "me deben",
-        "me lo deben",
-        "me van a devolver",
-        "me devolveran",
-        "reembolso",
-        "reembolsar",
-        "reimburse",
-        "reimbursement",
-        "pay me back",
-        "paid back",
-        "owes me",
-        "owe me"
+        "me deben", "me lo deben", "me van a devolver", "me devolveran", "reembolso", "reembolsar",
+        "reimburse", "reimbursement", "pay me back", "paid back", "owes me", "owe me"
     ]
 
     private static let oneTimeIncomePhrases = [
-        "solo una vez",
-        "una sola vez",
-        "no volvera a pasar",
-        "no espero recibirlo de nuevo",
-        "no planeo recibirlo de nuevo",
-        "one time",
-        "one-time",
-        "only once",
-        "never again",
-        "do not expect to receive this again",
-        "dont expect to receive this again"
+        "solo una vez", "una sola vez", "no volvera a pasar", "no espero recibirlo de nuevo",
+        "no planeo recibirlo de nuevo", "one time", "one-time", "only once", "never again",
+        "do not expect to receive this again", "dont expect to receive this again"
     ]
 
     private static let irregularIncomePhrases = [
-        "no frecuentemente",
-        "no frecuente",
-        "no es frecuente",
-        "de vez en cuando",
-        "irregular",
-        "no fijo",
-        "no es fijo",
-        "not often",
-        "not frequently",
-        "not recurring",
-        "occasional",
-        "not fixed",
-        "varies"
+        "no frecuentemente", "no frecuente", "no es frecuente", "de vez en cuando", "irregular",
+        "no fijo", "no es fijo", "not often", "not frequently", "not recurring", "occasional",
+        "not fixed", "varies"
     ]
 
     private static let genericRecurringPhrases = [
-        "recurrente",
-        "recurrent",
-        "recurring",
-        "regularmente",
-        "regularly",
-        "se repite",
-        "repeats"
+        "recurrente", "recurrent", "recurring", "regularmente", "regularly", "se repite", "repeats"
     ]
 
     private static let committedTruePhrases = [
-        "tengo que pagarlo",
-        "tengo que pagar esto",
-        "es obligatorio",
-        "ya esta comprometido",
-        "ya lo debo",
-        "must pay",
-        "have to pay",
-        "obligatory",
-        "already committed",
-        "already owe"
+        "tengo que pagarlo", "tengo que pagar esto", "es obligatorio", "ya esta comprometido", "ya lo debo",
+        "must pay", "have to pay", "obligatory", "already committed", "already owe"
     ]
 
     private static let committedFalsePhrases = [
-        "puedo cancelarlo",
-        "puedo evitarlo",
-        "no esta comprometido",
-        "es opcional",
-        "can cancel",
-        "can skip",
-        "not committed",
-        "optional"
+        "puedo cancelarlo", "puedo evitarlo", "no esta comprometido", "es opcional",
+        "can cancel", "can skip", "not committed", "optional"
     ]
 
     private static let essentialTruePhrases = [
-        "es esencial",
-        "es necesario",
-        "lo necesito",
-        "essential",
-        "necessary",
-        "need this"
+        "es esencial", "es necesario", "lo necesito", "essential", "necessary", "need this"
     ]
 
     private static let essentialFalsePhrases = [
-        "no es esencial",
-        "no lo necesito",
-        "es un gusto",
-        "nonessential",
-        "non-essential",
-        "not essential",
-        "nice to have"
+        "no es esencial", "no lo necesito", "es un gusto", "nonessential", "non-essential",
+        "not essential", "nice to have"
     ]
 
     private static let goalMandatoryPhrases = [
-        "es obligatorio",
-        "tiene que cumplirse",
-        "lo tengo que pagar",
-        "no puedo posponerlo",
-        "mandatory",
-        "must happen",
-        "must fund",
-        "cannot postpone",
-        "cant postpone"
+        "es obligatorio", "tiene que cumplirse", "lo tengo que pagar", "no puedo posponerlo",
+        "mandatory", "must happen", "must fund", "cannot postpone", "cant postpone"
     ]
 
     private static let goalFlexiblePhrases = [
-        "puedo posponerlo",
-        "puede esperar",
-        "es flexible",
-        "no es obligatorio",
-        "can postpone",
-        "can wait",
-        "flexible",
-        "not mandatory"
+        "puedo posponerlo", "puede esperar", "es flexible", "no es obligatorio",
+        "can postpone", "can wait", "flexible", "not mandatory"
     ]
 
     private static let reservePhrases = [
-        "quiero guardar",
-        "necesito guardar",
-        "no quiero tocar",
-        "quiero mantener al menos",
-        "necesito mantener al menos",
-        "reserva",
-        "colchon",
-        "keep at least",
-        "need to keep",
-        "do not touch",
-        "dont touch",
-        "reserve",
-        "minimum cash"
+        "quiero guardar", "necesito guardar", "no quiero tocar", "quiero mantener al menos",
+        "necesito mantener al menos", "reserva", "colchon", "keep at least", "need to keep",
+        "do not touch", "dont touch", "reserve", "minimum cash"
     ]
 
-    // MARK: - Recognition helpers
-
     private static func detectCadence(in text: String) -> RecurrenceCadence? {
-        if containsAny(text, [
-            "cada dos semanas",
-            "cada 2 semanas",
-            "quincenal",
-            "quincenalmente",
-            "every two weeks",
-            "every 2 weeks",
-            "biweekly",
-            "bi-weekly"
-        ]) {
+        if containsAny(text, ["cada dos semanas", "cada 2 semanas", "quincenal", "quincenalmente", "every two weeks", "every 2 weeks", "biweekly", "bi-weekly"]) {
             return .biweekly
         }
-
-        if containsAny(text, [
-            "cada mes",
-            "mensual",
-            "mensualmente",
-            "every month",
-            "monthly"
-        ]) {
+        if containsAny(text, ["cada mes", "mensual", "mensualmente", "every month", "monthly"]) {
             return .monthly
         }
-
-        if containsAny(text, [
-            "cada semana",
-            "semanal",
-            "semanalmente",
-            "every week",
-            "weekly"
-        ]) {
+        if containsAny(text, ["cada semana", "semanal", "semanalmente", "every week", "weekly"]) {
             return .weekly
         }
-
         return nil
     }
 
     private static func extractConfidence(from text: String) -> Double? {
-        let confidenceWords = [
-            "probabilidad",
-            "chance",
-            "confidence",
-            "seguro",
-            "likely",
-            "probable"
-        ]
+        let confidenceWords = ["probabilidad", "chance", "confidence", "seguro", "likely", "probable"]
         guard containsAny(text, confidenceWords) else { return nil }
 
-        if let captures = captures(#"([0-9]{1,3})\s*(?:%|percent|por ciento)"#, in: text),
-           let value = Double(captures[1]) {
+        if let match = captures(#"([0-9]{1,3})\s*(?:%|percent|por ciento)"#, in: text),
+           let value = Double(match[1]) {
             return min(max(value / 100.0, 0), 1)
         }
 
-        if let captures = captures(#"(?:confidence|probabilidad)\s*(?:de|of|=|:)?\s*(0(?:\.[0-9]+)?|1(?:\.0+)?)"#, in: text),
-           let value = Double(captures[1]) {
+        if let match = captures(#"(?:confidence|probabilidad)\s*(?:de|of|=|:)?\s*(0(?:\.[0-9]+)?|1(?:\.0+)?)"#, in: text),
+           let value = Double(match[1]) {
             return min(max(value, 0), 1)
         }
-
         return nil
     }
 
-    private static func extractMoneyAmount(from text: String) -> Double? {
-        let pattern = #"(?:\$\s*|usd\s*)?([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)"#
-        guard let match = captures(pattern, in: text) else { return nil }
-        let normalizedNumber = match[1].replacingOccurrences(of: ",", with: "")
-        return Double(normalizedNumber)
+    /// Reserve amounts must be explicitly money-like or grammatically attached to a reserve phrase.
+    /// This prevents dates such as "October 1" or "2026-10-01" from being mistaken for $1/$2026.
+    private static func extractReserveAmount(from text: String) -> Double? {
+        let number = #"([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)"#
+        let patterns = [
+            #"\$\s*"# + number,
+            #"\busd\s*"# + number,
+            number + #"\s*usd\b"#,
+            #"(?:keep at least|need to keep|minimum cash|quiero mantener al menos|necesito mantener al menos|quiero guardar|necesito guardar|reserve|reserva|colchon)\s*(?:of|de|is|es|:)?\s*"# + number
+        ]
+
+        for pattern in patterns {
+            guard let match = captures(pattern, in: text), match.count > 1 else { continue }
+            let normalizedNumber = match[1].replacingOccurrences(of: ",", with: "")
+            if let amount = Double(normalizedNumber), amount >= 0 {
+                return amount
+            }
+        }
+        return nil
     }
 
-    private static func extractDate(
-        from text: String,
-        asOfDate: Date,
-        calendar: Calendar
-    ) -> Date? {
+    private static func extractDate(from text: String, asOfDate: Date, calendar: Calendar) -> Date? {
         if containsAny(text, ["manana", "tomorrow"]) {
             return calendar.date(byAdding: .day, value: 1, to: asOfDate)
         }
-
-        if containsAny(text, ["hoy", "today"]) {
-            return asOfDate
-        }
+        if containsAny(text, ["hoy", "today"]) { return asOfDate }
 
         if let match = captures(#"(?:en|in)\s+([0-9]+)\s+(?:dias|dia|days|day)"#, in: text),
            let days = Int(match[1]) {
             return calendar.date(byAdding: .day, value: days, to: asOfDate)
         }
-
         if containsAny(text, ["la semana que viene", "proxima semana", "next week"]) {
             return calendar.date(byAdding: .day, value: 7, to: asOfDate)
         }
 
         if let iso = captures(#"\b(20[0-9]{2})-([0-9]{1,2})-([0-9]{1,2})\b"#, in: text),
-           let year = Int(iso[1]),
-           let month = Int(iso[2]),
-           let day = Int(iso[3]) {
+           let year = Int(iso[1]), let month = Int(iso[2]), let day = Int(iso[3]) {
             return calendar.date(from: DateComponents(year: year, month: month, day: day))
         }
 
-        if let monthDate = extractNamedMonthDate(from: text, asOfDate: asOfDate, calendar: calendar) {
-            return monthDate
+        if let named = extractNamedMonthDate(from: text, asOfDate: asOfDate, calendar: calendar) {
+            return named
         }
 
-        let weekdayMap: [(String, Int)] = [
-            ("domingo", 1), ("sunday", 1),
-            ("lunes", 2), ("monday", 2),
-            ("martes", 3), ("tuesday", 3),
-            ("miercoles", 4), ("wednesday", 4),
-            ("jueves", 5), ("thursday", 5),
-            ("viernes", 6), ("friday", 6),
+        let weekdays: [(String, Int)] = [
+            ("domingo", 1), ("sunday", 1), ("lunes", 2), ("monday", 2),
+            ("martes", 3), ("tuesday", 3), ("miercoles", 4), ("wednesday", 4),
+            ("jueves", 5), ("thursday", 5), ("viernes", 6), ("friday", 6),
             ("sabado", 7), ("saturday", 7)
         ]
-
-        for (word, targetWeekday) in weekdayMap where text.contains(word) {
+        for (word, targetWeekday) in weekdays where text.contains(word) {
             let currentWeekday = calendar.component(.weekday, from: asOfDate)
             var delta = (targetWeekday - currentWeekday + 7) % 7
             if delta == 0 { delta = 7 }
             return calendar.date(byAdding: .day, value: delta, to: asOfDate)
         }
-
         return nil
     }
 
-    private static func extractNamedMonthDate(
-        from text: String,
-        asOfDate: Date,
-        calendar: Calendar
-    ) -> Date? {
+    private static func extractNamedMonthDate(from text: String, asOfDate: Date, calendar: Calendar) -> Date? {
         let monthNumbers: [String: Int] = [
-            "enero": 1, "january": 1,
-            "febrero": 2, "february": 2,
-            "marzo": 3, "march": 3,
-            "abril": 4, "april": 4,
-            "mayo": 5, "may": 5,
-            "junio": 6, "june": 6,
-            "julio": 7, "july": 7,
-            "agosto": 8, "august": 8,
+            "enero": 1, "january": 1, "febrero": 2, "february": 2,
+            "marzo": 3, "march": 3, "abril": 4, "april": 4,
+            "mayo": 5, "may": 5, "junio": 6, "june": 6,
+            "julio": 7, "july": 7, "agosto": 8, "august": 8,
             "septiembre": 9, "setiembre": 9, "september": 9,
-            "octubre": 10, "october": 10,
-            "noviembre": 11, "november": 11,
+            "octubre": 10, "october": 10, "noviembre": 11, "november": 11,
             "diciembre": 12, "december": 12
         ]
         let monthPattern = monthNumbers.keys.sorted { $0.count > $1.count }.joined(separator: "|")
 
-        let dayFirstPattern = #"\b([0-9]{1,2})(?:st|nd|rd|th)?\s+(?:de\s+)?("# + monthPattern + #")(?:\s+(?:de\s+)?(20[0-9]{2}))?\b"#
-        if let match = captures(dayFirstPattern, in: text),
-           let day = Int(match[1]),
-           let month = monthNumbers[match[2]] {
-            let explicitYear = Int(match[3])
-            return futureDate(
-                day: day,
-                month: month,
-                explicitYear: explicitYear,
-                asOfDate: asOfDate,
-                calendar: calendar
-            )
+        let dayFirst = #"\b([0-9]{1,2})(?:st|nd|rd|th)?\s+(?:de\s+)?("# + monthPattern + #")(?:\s+(?:de\s+)?(20[0-9]{2}))?\b"#
+        if let match = captures(dayFirst, in: text), let day = Int(match[1]), let month = monthNumbers[match[2]] {
+            return futureDate(day: day, month: month, explicitYear: Int(match[3]), asOfDate: asOfDate, calendar: calendar)
         }
 
-        let monthFirstPattern = #"\b("# + monthPattern + #")\s+([0-9]{1,2})(?:st|nd|rd|th)?(?:,?\s+(20[0-9]{2}))?\b"#
-        if let match = captures(monthFirstPattern, in: text),
-           let month = monthNumbers[match[1]],
-           let day = Int(match[2]) {
-            let explicitYear = Int(match[3])
-            return futureDate(
-                day: day,
-                month: month,
-                explicitYear: explicitYear,
-                asOfDate: asOfDate,
-                calendar: calendar
-            )
+        let monthFirst = #"\b("# + monthPattern + #")\s+([0-9]{1,2})(?:st|nd|rd|th)?(?:,?\s+(20[0-9]{2}))?\b"#
+        if let match = captures(monthFirst, in: text), let month = monthNumbers[match[1]], let day = Int(match[2]) {
+            return futureDate(day: day, month: month, explicitYear: Int(match[3]), asOfDate: asOfDate, calendar: calendar)
         }
-
         return nil
     }
 
-    private static func futureDate(
-        day: Int,
-        month: Int,
-        explicitYear: Int?,
-        asOfDate: Date,
-        calendar: Calendar
-    ) -> Date? {
+    private static func futureDate(day: Int, month: Int, explicitYear: Int?, asOfDate: Date, calendar: Calendar) -> Date? {
         let currentYear = calendar.component(.year, from: asOfDate)
         var year = explicitYear ?? currentYear
-        guard var candidate = calendar.date(from: DateComponents(year: year, month: month, day: day)) else {
-            return nil
-        }
-
+        guard var candidate = calendar.date(from: DateComponents(year: year, month: month, day: day)) else { return nil }
         if explicitYear == nil && candidate < calendar.startOfDay(for: asOfDate) {
             year += 1
-            guard let nextYear = calendar.date(from: DateComponents(year: year, month: month, day: day)) else {
-                return nil
-            }
+            guard let nextYear = calendar.date(from: DateComponents(year: year, month: month, day: day)) else { return nil }
             candidate = nextYear
         }
-
         return candidate
     }
 
@@ -542,29 +370,20 @@ public enum QualitativeNoteInterpreter {
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
         let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
         guard let match = regex.firstMatch(in: text, range: fullRange) else { return nil }
-
         return (0..<match.numberOfRanges).map { index in
             let range = match.range(at: index)
-            guard range.location != NSNotFound,
-                  let swiftRange = Range(range, in: text) else {
-                return ""
-            }
+            guard range.location != NSNotFound, let swiftRange = Range(range, in: text) else { return "" }
             return String(text[swiftRange])
         }
     }
 
     private static func deduplicated(_ directives: [QualitativeDirective]) -> [QualitativeDirective] {
         var result: [QualitativeDirective] = []
-        for directive in directives where !result.contains(directive) {
-            result.append(directive)
-        }
+        for directive in directives where !result.contains(directive) { result.append(directive) }
         return result
     }
 }
 
-/// Ready-to-show examples for the qualitative text box. Keeping these close to the parser
-/// makes it less likely that the UI suggests language the deterministic interpreter cannot
-/// actually understand.
 public enum QualitativeNoteExamples {
     public static func examples(for subject: QualitativeNoteSubject) -> [String] {
         switch subject {
@@ -583,11 +402,7 @@ public enum QualitativeNoteExamples {
                 "This isn't essential, but I already committed to it."
             ]
         case .goal:
-            return [
-                "I can't postpone this.",
-                "This goal can wait.",
-                "This is mandatory."
-            ]
+            return ["I can't postpone this.", "This goal can wait.", "This is mandatory."]
         case .general:
             return [
                 "I need to keep at least $500 untouched.",

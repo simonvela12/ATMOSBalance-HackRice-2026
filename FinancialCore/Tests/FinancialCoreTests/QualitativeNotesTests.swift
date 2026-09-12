@@ -19,7 +19,6 @@ final class QualitativeNotesTests: XCTestCase {
             asOfDate: asOfDate,
             calendar: calendar
         )
-
         XCTAssertTrue(result.directives.contains(.setIncomeType(.irregular)))
         XCTAssertTrue(result.isActionable)
     }
@@ -31,7 +30,6 @@ final class QualitativeNotesTests: XCTestCase {
             asOfDate: asOfDate,
             calendar: calendar
         )
-
         XCTAssertTrue(result.directives.contains(.setIncomeType(.oneTime)))
         XCTAssertTrue(result.isActionable)
     }
@@ -43,7 +41,6 @@ final class QualitativeNotesTests: XCTestCase {
             asOfDate: asOfDate,
             calendar: calendar
         )
-
         let tomorrow = calendar.date(byAdding: .day, value: 1, to: asOfDate)!
         XCTAssertTrue(result.directives.contains(.expectReimbursement(on: tomorrow)))
         XCTAssertTrue(result.isActionable)
@@ -56,7 +53,6 @@ final class QualitativeNotesTests: XCTestCase {
             asOfDate: asOfDate,
             calendar: calendar
         )
-
         XCTAssertTrue(result.recognizedSomething)
         XCTAssertTrue(result.missingFields.contains(.repaymentDate))
         XCTAssertFalse(result.isActionable)
@@ -69,7 +65,6 @@ final class QualitativeNotesTests: XCTestCase {
             asOfDate: asOfDate,
             calendar: calendar
         )
-
         XCTAssertTrue(result.directives.contains(.setIncomeType(.recurring)))
         XCTAssertTrue(result.directives.contains(.setRecurrence(cadence: .biweekly, firstDate: nil)))
         XCTAssertTrue(result.isActionable)
@@ -82,7 +77,6 @@ final class QualitativeNotesTests: XCTestCase {
             asOfDate: asOfDate,
             calendar: calendar
         )
-
         XCTAssertTrue(result.directives.contains(.setIncomeType(.recurring)))
         XCTAssertTrue(result.missingFields.contains(.recurrenceCadence))
         XCTAssertFalse(result.isActionable)
@@ -95,7 +89,6 @@ final class QualitativeNotesTests: XCTestCase {
             asOfDate: asOfDate,
             calendar: calendar
         )
-
         XCTAssertTrue(result.directives.contains(.setExpenseCommitted(false)))
         XCTAssertTrue(result.isActionable)
     }
@@ -107,7 +100,6 @@ final class QualitativeNotesTests: XCTestCase {
             asOfDate: asOfDate,
             calendar: calendar
         )
-
         XCTAssertTrue(result.directives.contains(.setGoalPriority(.mandatory)))
         XCTAssertTrue(result.isActionable)
     }
@@ -119,7 +111,6 @@ final class QualitativeNotesTests: XCTestCase {
             asOfDate: asOfDate,
             calendar: calendar
         )
-
         XCTAssertTrue(result.directives.contains(.setGoalPriority(.flexible)))
         XCTAssertTrue(result.isActionable)
     }
@@ -131,7 +122,6 @@ final class QualitativeNotesTests: XCTestCase {
             asOfDate: asOfDate,
             calendar: calendar
         )
-
         XCTAssertTrue(result.directives.contains(.setPersonalReserve(amount: 500, effectiveDate: asOfDate)))
         XCTAssertTrue(result.isActionable)
     }
@@ -143,10 +133,46 @@ final class QualitativeNotesTests: XCTestCase {
             asOfDate: asOfDate,
             calendar: calendar
         )
-
         let expectedDate = calendar.date(from: DateComponents(year: 2026, month: 10, day: 1))!
         XCTAssertTrue(result.directives.contains(.setPersonalReserve(amount: 1000, effectiveDate: expectedDate)))
         XCTAssertTrue(result.isActionable)
+    }
+
+    func testReserveWithoutCurrencyMarkerParsesAmountWhenAttachedToReservePhrase() {
+        let result = QualitativeNoteInterpreter.parse(
+            "I need to keep at least 500 untouched.",
+            context: QualitativeNoteContext(subject: .general),
+            asOfDate: asOfDate,
+            calendar: calendar
+        )
+        XCTAssertTrue(result.directives.contains(.setPersonalReserve(amount: 500, effectiveDate: asOfDate)))
+        XCTAssertTrue(result.isActionable)
+    }
+
+    func testReserveDateWithoutAmountRequestsAmountInsteadOfGuessingDayNumber() {
+        let result = QualitativeNoteInterpreter.parse(
+            "I want a reserve starting October 1.",
+            context: QualitativeNoteContext(subject: .general),
+            asOfDate: asOfDate,
+            calendar: calendar
+        )
+        XCTAssertTrue(result.recognizedSomething)
+        XCTAssertTrue(result.directives.isEmpty)
+        XCTAssertEqual(result.missingFields, [.reserveAmount])
+        XCTAssertFalse(result.isActionable)
+    }
+
+    func testReserveISODateWithoutAmountDoesNotTreatYearAsMoney() {
+        let result = QualitativeNoteInterpreter.parse(
+            "I need a reserve starting 2026-10-01.",
+            context: QualitativeNoteContext(subject: .general),
+            asOfDate: asOfDate,
+            calendar: calendar
+        )
+        XCTAssertTrue(result.recognizedSomething)
+        XCTAssertTrue(result.directives.isEmpty)
+        XCTAssertEqual(result.missingFields, [.reserveAmount])
+        XCTAssertFalse(result.isActionable)
     }
 
     func testIrregularIncomeConfidencePercentIsParsed() {
@@ -156,7 +182,6 @@ final class QualitativeNotesTests: XCTestCase {
             asOfDate: asOfDate,
             calendar: calendar
         )
-
         XCTAssertTrue(result.directives.contains(.setIncomeType(.irregular)))
         XCTAssertTrue(result.directives.contains(.setIrregularIncomeConfidence(0.6)))
         XCTAssertTrue(result.isActionable)
@@ -169,7 +194,6 @@ final class QualitativeNotesTests: XCTestCase {
             asOfDate: asOfDate,
             calendar: calendar
         )
-
         let expectedDate = calendar.date(from: DateComponents(year: 2026, month: 9, day: 20))!
         XCTAssertTrue(result.directives.contains(.expectReimbursement(on: expectedDate)))
         XCTAssertTrue(result.isActionable)
@@ -182,7 +206,6 @@ final class QualitativeNotesTests: XCTestCase {
             asOfDate: asOfDate,
             calendar: calendar
         )
-
         XCTAssertFalse(result.recognizedSomething)
         XCTAssertFalse(result.isActionable)
         XCTAssertTrue(result.directives.isEmpty)
