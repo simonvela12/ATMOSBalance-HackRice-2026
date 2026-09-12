@@ -1,0 +1,87 @@
+workflows:
+  ios-simulator:
+    name: iOS Simulator (.app for Appetize)
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    environment:
+      xcode: latest
+      vars:
+        XCODE_PROJECT: "Test.xcodeproj"
+        XCODE_SCHEME: "Test"
+        IOS_DEPLOYMENT_TARGET: "18.0"
+    scripts:
+      - name: Build unsigned Simulator app
+        script: |
+          xcodebuild build \
+            -project "$XCODE_PROJECT" \
+            -scheme "$XCODE_SCHEME" \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination "generic/platform=iOS Simulator" \
+            -derivedDataPath "$CM_BUILD_DIR/build/ios-simulator" \
+            IPHONEOS_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            ONLY_ACTIVE_ARCH=NO
+      - name: Compress app for Appetize
+        script: |
+          APP_PATH="$CM_BUILD_DIR/build/ios-simulator/Build/Products/Debug-iphonesimulator/$XCODE_SCHEME.app"
+          test -d "$APP_PATH"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$APP_PATH" \
+            "$CM_BUILD_DIR/build/$XCODE_SCHEME-iOS-Simulator.zip"
+    artifacts:
+      - build/Test-iOS-Simulator.zip
+      - build/ios-simulator/Build/Products/Debug-iphonesimulator/Test.app
+      - /tmp/xcodebuild_logs/*.log
+
+  ios-simulator-appetize:
+    name: iOS Simulator + publish to Appetize
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    environment:
+      groups:
+        - appetize_credentials
+      xcode: latest
+      vars:
+        XCODE_PROJECT: "Test.xcodeproj"
+        XCODE_SCHEME: "Test"
+        IOS_DEPLOYMENT_TARGET: "18.0"
+    scripts:
+      - name: Build unsigned Simulator app
+        script: |
+          xcodebuild build \
+            -project "$XCODE_PROJECT" \
+            -scheme "$XCODE_SCHEME" \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination "generic/platform=iOS Simulator" \
+            -derivedDataPath "$CM_BUILD_DIR/build/ios-simulator" \
+            IPHONEOS_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            ONLY_ACTIVE_ARCH=NO
+      - name: Compress app for Appetize
+        script: |
+          APP_PATH="$CM_BUILD_DIR/build/ios-simulator/Build/Products/Debug-iphonesimulator/$XCODE_SCHEME.app"
+          test -d "$APP_PATH"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$APP_PATH" \
+            "$CM_BUILD_DIR/build/$XCODE_SCHEME-iOS-Simulator.zip"
+    artifacts:
+      - build/Test-iOS-Simulator.zip
+      - build/ios-simulator/Build/Products/Debug-iphonesimulator/Test.app
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      scripts:
+        - name: Publish Simulator app to Appetize
+          script: |
+            test -n "$APPETIZE_API_TOKEN"
+            test -n "$APPETIZE_APP_PUBLIC_KEY"
+            curl --fail-with-body --location \
+              --user "$APPETIZE_API_TOKEN:" \
+              --request POST \
+              "https://api.appetize.io/v1/apps/$APPETIZE_APP_PUBLIC_KEY" \
+              --form "file=@$CM_BUILD_DIR/build/$XCODE_SCHEME-iOS-Simulator.zip"

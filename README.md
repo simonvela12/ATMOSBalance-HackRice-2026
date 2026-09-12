@@ -786,3 +786,43 @@ Optional / Planned / High-Priority Goal
 ```
 
 The app should understand these differences before making recommendations.
+
+---
+
+# Browser-based iOS Simulator build
+
+The repository includes `codemagic.yaml` with two Codemagic workflows. Both
+produce an unsigned iOS Simulator build; no Apple Developer certificate or
+provisioning profile is required.
+
+## First Appetize upload
+
+1. In Codemagic, add this GitHub repository as an iOS application.
+2. Run **iOS Simulator (.app for Appetize)** (`ios-simulator`).
+3. Download the `Test-iOS-Simulator.zip` build artifact.
+4. Upload that ZIP to Appetize as an iOS Simulator build. Do not convert it to
+   an IPA.
+5. Copy the Appetize app's public key after the upload completes.
+
+The build uses Xcode's latest available version on a Mac mini M2 and disables
+code signing explicitly. Although the Xcode project currently declares iOS
+26.5 as its deployment target, the CI build overrides it to iOS 18.0 so the
+artifact can run on a wider selection of Appetize simulator runtimes.
+
+## Automatic Appetize updates
+
+After the first upload, create a Codemagic environment-variable group named
+`appetize_credentials` with these encrypted variables:
+
+* `APPETIZE_API_TOKEN`: the API token from the Appetize account page.
+* `APPETIZE_APP_PUBLIC_KEY`: the public key of the app created by the first
+  upload.
+
+Then run **iOS Simulator + publish to Appetize**
+(`ios-simulator-appetize`). It builds the same ZIP and sends it to the existing
+Appetize app. Restrict the environment-variable group to trusted branches if
+pull requests from forks are enabled.
+
+The generated app targets iOS Simulator only. It cannot be installed on a
+physical iPhone, and hardware-dependent behavior such as camera, Bluetooth,
+NFC, and sensors still needs testing on a real device.
