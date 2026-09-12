@@ -10,6 +10,8 @@
 		A10000000000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* ContentView.swift */; };
 		A10000000000000000000003 /* FinancialCoreBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* FinancialCoreBridge.swift */; };
 		A10000000000000000000004 /* FinancialCore in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000002 /* FinancialCore */; };
+		A10000000000000000000005 /* BankAccountStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* BankAccountStore.swift */; };
+		A10000000000000000000006 /* FinanceCore in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000004 /* FinanceCore */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -17,6 +19,7 @@
 		A20000000000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A20000000000000000000003 /* Finanzas2026.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Finanzas2026.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A20000000000000000000004 /* FinancialCoreBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinancialCoreBridge.swift; sourceTree = "<group>"; };
+		A20000000000000000000005 /* BankAccountStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BankAccountStore.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -25,6 +28,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000004 /* FinancialCore in Frameworks */,
+				A10000000000000000000006 /* FinanceCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -45,6 +49,7 @@
 				A20000000000000000000001 /* Finanzas2026App.swift */,
 				A20000000000000000000002 /* ContentView.swift */,
 				A20000000000000000000004 /* FinancialCoreBridge.swift */,
+				A20000000000000000000005 /* BankAccountStore.swift */,
 			);
 			path = Finanzas2026;
 			sourceTree = "<group>";
@@ -73,6 +78,7 @@
 			name = Finanzas2026;
 			packageProductDependencies = (
 				A00000000000000000000002 /* FinancialCore */,
+				A00000000000000000000004 /* FinanceCore */,
 			);
 			productName = Finanzas2026;
 			productReference = A20000000000000000000003 /* Finanzas2026.app */;
@@ -99,6 +105,7 @@
 			mainGroup = A40000000000000000000001;
 			packageReferences = (
 				A00000000000000000000001 /* XCLocalSwiftPackageReference "FinancialCore" */,
+				A00000000000000000000003 /* XCLocalSwiftPackageReference "FinanceCore" */,
 			);
 			productRefGroup = A40000000000000000000003 /* Products */;
 			projectDirPath = "";
@@ -124,6 +131,7 @@
 				A10000000000000000000001 /* Finanzas2026App.swift in Sources */,
 				A10000000000000000000002 /* ContentView.swift in Sources */,
 				A10000000000000000000003 /* FinancialCoreBridge.swift in Sources */,
+				A10000000000000000000005 /* BankAccountStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -225,6 +233,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../FinancialCore;
 		};
+		A00000000000000000000003 /* XCLocalSwiftPackageReference "FinanceCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ..;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -232,6 +244,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A00000000000000000000001 /* XCLocalSwiftPackageReference "FinancialCore" */;
 			productName = FinancialCore;
+		};
+		A00000000000000000000004 /* FinanceCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A00000000000000000000003 /* XCLocalSwiftPackageReference "FinanceCore" */;
+			productName = FinanceCore;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

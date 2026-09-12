@@ -1,9 +1,12 @@
 import Foundation
+import FinanceCore
 import FinancialCore
 
 struct AppFinancialModel {
     var optionalExpenseIsCommitted = false
     var goalIsMandatory = false
+    var bankAccounts: [FinanceCore.FinancialAccount] = []
+    var bankTransactions: [FinanceCore.FinancialTransaction] = []
 
     private var calendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
@@ -13,12 +16,24 @@ struct AppFinancialModel {
 
     var asOfDate: Date { date(2026, 9, 12) }
 
+    var usesLinkedAccount: Bool { !bankAccounts.isEmpty }
+
+    func usingBankData(
+        accounts: [FinanceCore.FinancialAccount],
+        transactions: [FinanceCore.FinancialTransaction]
+    ) -> AppFinancialModel {
+        var copy = self
+        copy.bankAccounts = accounts
+        copy.bankTransactions = transactions
+        return copy
+    }
+
     var profile: FinancialProfile {
         FinancialProfileAdapter.makeProfile(
-            currentCash: 8_000,
+            currentCash: linkedCashBalance,
             asOfDate: asOfDate,
             personalReserve: 7_000,
-            incomes: [
+            incomes: usesLinkedAccount ? inferredIncomeEvents : [
                 QualitativeIncomeInput(
                     amount: 1_000,
                     date: date(2026, 11, 1),
@@ -34,7 +49,7 @@ struct AppFinancialModel {
                     confidence: 0.7
                 )
             ],
-            expenses: [
+            expenses: (usesLinkedAccount ? inferredExpenseEvents : [
                 QualitativeExpenseInput(
                     amount: 500,
                     date: date(2026, 11, 15),
@@ -43,7 +58,8 @@ struct AppFinancialModel {
                     committed: true,
                     reimbursable: false,
                     extraordinary: false
-                ),
+                )
+            ]) + [
                 QualitativeExpenseInput(
                     amount: 300,
                     date: date(2026, 9, 20),
@@ -63,7 +79,7 @@ struct AppFinancialModel {
                     priority: goalIsMandatory ? .mandatory : .flexible
                 )
             ],
-            weeklySpendingHistory: [],
+            weeklySpendingHistory: linkedWeeklySpendingHistory,
             spendingPolicy: SpendingPolicy(
                 lookbackWeeks: 6,
                 bufferWeeks: 0,
@@ -120,6 +136,121 @@ struct AppFinancialModel {
 
     private func date(_ year: Int, _ month: Int, _ day: Int) -> Date {
         calendar.date(from: DateComponents(year: year, month: month, day: day))!
+    }
+
+    private var linkedCashBalance: Double {
+        guard usesLinkedAccount else { return 8_000 }
+        let minorUnits = bankAccounts
+            .filter { $0.accountType != .creditCard }
+            .reduce(Int64(0)) { $0 + $1.balanceMinorUnits }
+        return Double(minorUnits) / 100
+    }
+
+    private var inferredIncomeEvents: [QualitativeIncomeInput] {
+        recurringCandidates(direction: .inflow).flatMap { candidate in
+            nextMonthlyDates(after: candidate.latestDate, count: 4).map { projectedDate in
+                QualitativeIncomeInput(
+                    amount: candidate.averageAmount,
+                    date: projectedDate,
+                    source: candidate.name,
+                    kind: .recurring,
+                    confidence: 1
+                )
+            }
+        }
+    }
+
+    private var inferredExpenseEvents: [QualitativeExpenseInput] {
+        recurringCandidates(direction: .outflow).flatMap { candidate in
+            nextMonthlyDates(after: candidate.latestDate, count: 4).map { projectedDate in
+                let essential = isEssential(category: candidate.category, description: candidate.name)
+                return QualitativeExpenseInput(
+                    amount: candidate.averageAmount,
+                    date: projectedDate,
+                    category: candidate.category ?? candidate.name,
+                    need: essential ? .essential : .important,
+                    committed: true,
+                    reimbursable: false,
+                    extraordinary: false
+                )
+            }
+        }
+    }
+
+    private var linkedWeeklySpendingHistory: [WeeklySpendingSample] {
+        guard usesLinkedAccount else { return [] }
+        let startOfAsOfWeek = calendar.dateInterval(of: .weekOfYear, for: asOfDate)?.start ?? asOfDate
+        let grouped = Dictionary(grouping: bankTransactions.filter {
+            $0.direction == .outflow && !$0.isTransfer && !$0.isPending && $0.transactionDate <= asOfDate
+        }) { transaction in
+            calendar.dateInterval(of: .weekOfYear, for: transaction.transactionDate)?.start ?? transaction.transactionDate
+        }
+
+        return grouped
+            .filter { week, _ in
+                week >= (calendar.date(byAdding: .day, value: -42, to: startOfAsOfWeek) ?? .distantPast)
+            }
+            .map { week, transactions in
+                WeeklySpendingSample(
+                    weekStart: week,
+                    totalVariableSpending: transactions.reduce(0) {
+                        $0 + Double($1.amountMinorUnits) / 100
+                    }
+                )
+            }
+            .sorted { $0.weekStart < $1.weekStart }
+    }
+
+    private struct RecurringCandidate {
+        let name: String
+        let category: String?
+        let averageAmount: Double
+        let latestDate: Date
+    }
+
+    private func recurringCandidates(direction: TransactionDirection) -> [RecurringCandidate] {
+        let eligible = bankTransactions.filter {
+            $0.direction == direction &&
+            !$0.isTransfer &&
+            !$0.isPending &&
+            (direction != .inflow || $0.sourceType != .refund) &&
+            $0.transactionDate <= asOfDate
+        }
+        let grouped = Dictionary(grouping: eligible) { transaction in
+            (transaction.merchantName ?? transaction.transactionDescription)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+        }
+
+        return grouped.compactMap { _, transactions in
+            let sorted = transactions.sorted { $0.transactionDate < $1.transactionDate }
+            guard sorted.count >= 2,
+                  let latest = sorted.last,
+                  let previous = sorted.dropLast().last else { return nil }
+            let gap = calendar.dateComponents([.day], from: previous.transactionDate, to: latest.transactionDate).day ?? 0
+            guard (20...40).contains(gap) else { return nil }
+            let average = sorted.reduce(0.0) { $0 + Double($1.amountMinorUnits) / 100 } / Double(sorted.count)
+            return RecurringCandidate(
+                name: latest.merchantName ?? latest.transactionDescription,
+                category: latest.category,
+                averageAmount: average,
+                latestDate: latest.transactionDate
+            )
+        }
+    }
+
+    private func nextMonthlyDates(after lastDate: Date, count: Int) -> [Date] {
+        var next = lastDate
+        while next <= asOfDate {
+            next = calendar.date(byAdding: .month, value: 1, to: next) ?? .distantFuture
+        }
+        return (0..<count).compactMap { calendar.date(byAdding: .month, value: $0, to: next) }
+    }
+
+    private func isEssential(category: String?, description: String) -> Bool {
+        let text = "\(category ?? "") \(description)".lowercased()
+        return ["rent", "housing", "utility", "utilities", "health", "medical", "education", "tuition"]
+            .contains { text.contains($0) }
     }
 }
 

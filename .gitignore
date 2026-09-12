@@ -14,5 +14,9 @@ build/
 .build/
 .swiftpm/
 
+# Local bank sandbox configuration
+.env
+.finance-data/
+
 # macOS
 .DS_Store

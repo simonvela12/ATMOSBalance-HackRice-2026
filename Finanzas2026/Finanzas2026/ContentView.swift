@@ -3,6 +3,7 @@ import Charts
 import FinancialCore
 
 struct ContentView: View {
+    @EnvironmentObject private var bankStore: BankAccountStore
     @State private var selectedMonth = ForecastMonth.september
     @State private var selectedDay: ForecastDay?
     @State private var showingAffordability = false
@@ -15,7 +16,14 @@ struct ContentView: View {
     }
 
     private var financialSnapshot: AppFinancialSnapshot {
-        try! financialModel.snapshot(through: selectedMonth.horizonDate)
+        try! effectiveFinancialModel.snapshot(through: selectedMonth.horizonDate)
+    }
+
+    private var effectiveFinancialModel: AppFinancialModel {
+        financialModel.usingBankData(
+            accounts: bankStore.accounts,
+            transactions: bankStore.transactions
+        )
     }
 
     private var displayedWeather: MoneyWeather {
@@ -85,7 +93,7 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showingAffordability) {
             AffordabilitySheet(
-                model: financialModel,
+                model: effectiveFinancialModel,
                 planningHorizon: selectedMonth.horizonDate,
                 startingWeather: displayedWeather
             )
@@ -95,6 +103,7 @@ struct ContentView: View {
         .sheet(isPresented: $showingIntegrationControls) {
             IntegrationControlsSheet(
                 model: $financialModel,
+                bankStore: bankStore,
                 planningHorizon: selectedMonth.horizonDate
             )
             .presentationDetents([.medium, .large])
@@ -125,7 +134,7 @@ struct ContentView: View {
 
             Spacer()
 
-            Text("DEMO")
+            Text(bankStore.isLinked ? "NESSIE" : "DEMO")
                 .font(.caption2.weight(.bold))
                 .tracking(0.8)
                 .padding(.horizontal, 10)
@@ -1100,15 +1109,44 @@ private struct LegacyAffordabilitySheet: View {
 
 private struct IntegrationControlsSheet: View {
     @Binding var model: AppFinancialModel
+    @ObservedObject var bankStore: BankAccountStore
     let planningHorizon: Date
+    @State private var showingLinkAccount = false
+
+    private var effectiveModel: AppFinancialModel {
+        model.usingBankData(accounts: bankStore.accounts, transactions: bankStore.transactions)
+    }
 
     private var snapshot: AppFinancialSnapshot {
-        try! model.snapshot(through: planningHorizon)
+        try! effectiveModel.snapshot(through: planningHorizon)
     }
 
     var body: some View {
         NavigationStack {
             Form {
+                Section("Linked account") {
+                    if bankStore.isLinked {
+                        ForEach(bankStore.accounts) { account in
+                            LabeledContent(account.name) {
+                                Text(
+                                    Double(account.balanceMinorUnits) / 100,
+                                    format: .currency(code: account.currencyCode).precision(.fractionLength(2))
+                                )
+                            }
+                        }
+                        LabeledContent("Imported transactions", value: "\(bankStore.transactions.count)")
+                        Button("Sync another Nessie customer") { showingLinkAccount = true }
+                    } else {
+                        Button {
+                            showingLinkAccount = true
+                        } label: {
+                            Label("Link a Nessie account", systemImage: "link.circle.fill")
+                        }
+                        Text("Balances and transactions from the linked account become the source for the entire forecast.")
+                            .font(.footnote)
+                    }
+                }
+
                 Section("Qualitative decisions") {
                     Toggle("Expense is essential / committed", isOn: $model.optionalExpenseIsCommitted)
                     Toggle("Goal is mandatory", isOn: $model.goalIsMandatory)
@@ -1139,6 +1177,72 @@ private struct IntegrationControlsSheet: View {
                 }
             }
             .navigationTitle("Financial profile")
+            .sheet(isPresented: $showingLinkAccount) {
+                LinkBankAccountSheet(store: bankStore)
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+            }
+        }
+    }
+}
+
+private struct LinkBankAccountSheet: View {
+    @ObservedObject var store: BankAccountStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var customerID = ""
+    @State private var apiKey = ""
+
+    private var canConnect: Bool {
+        !customerID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Nessie credentials") {
+                    TextField("Customer ID", text: $customerID)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    SecureField("API key", text: $apiKey)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                }
+
+                Section {
+                    Button {
+                        Task {
+                            await store.linkNessieAccount(apiKey: apiKey, customerID: customerID)
+                            if store.isLinked {
+                                apiKey = ""
+                                dismiss()
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            if store.phase == .connecting { ProgressView() }
+                            Text(store.phase == .connecting ? "Connecting…" : "Connect & sync")
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .disabled(!canConnect || store.phase == .connecting)
+                } footer: {
+                    Text("The API key stays in memory only. Normalized account and transaction data is cached on this iPhone.")
+                }
+
+                if case let .failed(message) = store.phase {
+                    Section("Couldn’t connect") {
+                        Text(message).foregroundStyle(.red)
+                    }
+                }
+            }
+            .navigationTitle("Link account")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
         }
     }
 }
