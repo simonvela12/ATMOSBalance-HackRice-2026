@@ -107,6 +107,15 @@ Examples the model must support:
 - The original expense remains fully visible on its original date; the later repayment is represented separately so the temporary liquidity dip is preserved.
 - The app must not silently assume that 100% of a shared expense will be reimbursed.
 
+### Planned events vs actual bank transactions
+
+- When a real linked-bank transaction appears that plausibly corresponds to a previously planned future event, the app may detect a **possible match**.
+- Matching must never silently mark the planned event as completed.
+- The user should see a confirmation such as: **“This looks like your planned Rent payment. Mark it as completed?”**
+- If the user confirms, the planned event and real transaction are linked and the planned cash flow is no longer counted separately, preventing double counting.
+- If the user rejects the match, both items remain separate.
+- Candidate matching may use explainable signals such as amount similarity, date proximity, merchant/payee, category, and event label, but these signals only create a suggestion, never an automatic financial change.
+
 ### Goals
 
 - Goal amount and target date.
@@ -246,6 +255,8 @@ Confidence behavior:
 - An earmarked deposit can increase bank cash without increasing discretionary Safe to Spend by the same amount.
 - When one deposit is split across purposes, only the unallocated/general portion should be treated as freely discretionary cash unless a linked obligation or goal is later released.
 - Earmarked funds are never silently released; when their purpose disappears, the user must explicitly choose whether to make them general, reassign them, or keep them reserved.
+- Planned events and actual bank transactions must never be double-counted after the user confirms they represent the same real-world event.
+- Possible event matches may be suggested automatically, but completion/linking always requires explicit confirmation.
 
 ## Confirmed decisions
 
@@ -261,6 +272,7 @@ Confidence behavior:
 10. If an earmarked purpose later disappears or is already fully satisfied, the earmarked money is **not automatically released**. The app asks the user to choose **Move to General cash / Reassign to another purpose / Keep reserved**. Until confirmed, the funds remain reserved.
 11. Variable expenses may use an optional **minimum / expected / maximum** range. Scenario mapping is inverted versus income: **Conservative = maximum expense, Expected = expected expense, Optimistic = minimum expense**.
 12. Future income, expenses, and reimbursements may use an optional **Earliest / Expected / Latest** date window when timing is uncertain. Scenario timing is deterministic: for income, Conservative = latest and Optimistic = earliest; for expenses, Conservative = earliest and Optimistic = latest; Expected uses the expected date in both cases.
+13. When a real bank transaction appears to match a previously planned event, the app suggests the match and asks the user to confirm. Only after confirmation are the two linked and the planned event marked completed so it is not counted twice.
 
 ## Open decisions
 
