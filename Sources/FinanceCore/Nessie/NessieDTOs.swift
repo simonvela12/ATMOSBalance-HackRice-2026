@@ -66,8 +66,20 @@ struct NessieTransfer: Decodable, Sendable {
     let description: String?
 
     enum CodingKeys: String, CodingKey {
-        case id = "_id", amount, status, description
+        case legacyID = "_id", id, amount, status, description
         case payerID = "payer_id", payeeID = "payee_id", transactionDate = "transaction_date"
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(String.self, forKey: .legacyID)
+            ?? container.decodeIfPresent(String.self, forKey: .id)
+        payerID = try container.decodeIfPresent(String.self, forKey: .payerID)
+        payeeID = try container.decodeIfPresent(String.self, forKey: .payeeID)
+        transactionDate = try container.decodeIfPresent(String.self, forKey: .transactionDate)
+        amount = try container.decodeIfPresent(Decimal.self, forKey: .amount)
+        status = try container.decodeIfPresent(String.self, forKey: .status)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
     }
 }
 

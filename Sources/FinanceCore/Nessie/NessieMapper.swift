@@ -40,6 +40,10 @@ enum NessieMapper {
         let direction: TransactionDirection
         if dto.payerID == account.externalAccountID { direction = .outflow }
         else if dto.payeeID == account.externalAccountID { direction = .inflow }
+        // The current Nessie sandbox also returns account-scoped transfers with
+        // `id` (rather than `_id`) and without payer/payee fields. The account in
+        // the request path is the source account for this representation.
+        else if dto.payerID == nil && dto.payeeID == nil { direction = .outflow }
         else { throw BankingError.malformedTransaction("Transfer does not reference account \(account.externalAccountID)") }
         return try transaction(id: dto.id, account: account, date: dto.transactionDate, amount: dto.amount,
                                description: dto.description ?? "Transfer", status: dto.status,

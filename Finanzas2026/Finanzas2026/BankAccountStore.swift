@@ -1,12 +1,14 @@
 import Combine
 import FinanceCore
 import Foundation
+import Security
 
 @MainActor
 final class BankAccountStore: ObservableObject {
     enum Phase: Equatable {
         case idle
         case loadingCache
+        case cached
         case connecting
         case connected
         case failed(String)
@@ -16,6 +18,7 @@ final class BankAccountStore: ObservableObject {
     @Published private(set) var accounts: [FinanceCore.FinancialAccount] = []
     @Published private(set) var transactions: [FinanceCore.FinancialTransaction] = []
     @Published private(set) var lastSyncResult: SyncResult?
+    @Published private(set) var syncRevision = 0
 
     private let repository: FileFinancialRepository
     private var syncServices: [String: BankSyncService] = [:]
@@ -31,11 +34,11 @@ final class BankAccountStore: ObservableObject {
         let storeURL = support
             .appendingPathComponent("Finanzas2026", isDirectory: true)
             .appendingPathComponent("nessie-store.json")
-        repository = try! FileFinancialRepository(fileURL: storeURL)
+        // This app store is intentionally Nessie-only. Old demo/provider records
+        // from previous builds are discarded when the cache is loaded.
+        repository = try! FileFinancialRepository(fileURL: storeURL, allowedProviders: [.nessie])
 
-        Task { [weak self] in
-            await self?.reloadCachedData()
-        }
+        Task { [weak self] in await self?.restoreAndRefresh() }
     }
 
     deinit {
@@ -43,14 +46,8 @@ final class BankAccountStore: ObservableObject {
     }
 
     var isLinked: Bool { !accounts.isEmpty }
-
-    /// A refresh only works while this session still holds the credentials that
-    /// created the sync service — cached data alone cannot be refreshed.
     var canRefresh: Bool { !syncServices.isEmpty }
-
-    /// True when the last sync completed but at least one account could not be
-    /// read in full, so its history is incomplete.
-    var hasPartialSync: Bool { lastSyncResult?.isPartial == true }
+    var importedTransferCount: Int { transactions.lazy.filter(\.isTransfer).count }
 
     var totalAvailableCash: Double {
         Double(
@@ -80,12 +77,18 @@ final class BankAccountStore: ObservableObject {
             // A sync can succeed and still return no accounts. Without this the app
             // reports success while `isLinked` stays false, stranding the user on the
             // connect screen with no explanation.
-            guard !accounts.isEmpty else {
+            guard (lastSyncResult?.accountsFetched ?? 0) > 0 else {
                 syncServices.removeValue(forKey: "nessie|\(customerID)")
                 phase = .failed("Connected to Nessie, but customer \(customerID) has no accounts. Check the customer ID.")
                 return
             }
 
+            // Ad-hoc unsigned Simulator builds (including Appetize artifacts) can
+            // reject Keychain access with errSecMissingEntitlement. Persistence is
+            // an enhancement, not part of the network sync transaction: keeping it
+            // best-effort ensures manual and automatic refresh remain active for
+            // the current session. Signed iPhone builds still restore securely.
+            try? NessieCredentialStore.save(.init(apiKey: apiKey, customerID: customerID))
             phase = .connected
             startAutomaticRefreshIfNeeded()
         } catch {
@@ -94,7 +97,10 @@ final class BankAccountStore: ObservableObject {
     }
 
     func refreshLinkedAccounts() async {
-        guard !syncServices.isEmpty else { return }
+        guard !syncServices.isEmpty else {
+            phase = .cached
+            return
+        }
         phase = .connecting
 
         var errors: [String] = []
@@ -119,7 +125,7 @@ final class BankAccountStore: ObservableObject {
         do {
             try await repository.load()
             try await reloadFromRepository()
-            phase = accounts.isEmpty ? .idle : .connected
+            phase = accounts.isEmpty ? .idle : .cached
         } catch {
             phase = .failed(error.localizedDescription)
         }
@@ -128,10 +134,17 @@ final class BankAccountStore: ObservableObject {
     private func reloadFromRepository() async throws {
         accounts = try await repository.accounts()
         transactions = try await repository.transactions(from: nil, to: nil)
+        syncRevision &+= 1
         await diagnostics.record(.financialStateUpdated, details: [
             "accounts": String(accounts.count),
             "transactions": String(transactions.count)
         ])
+    }
+
+    private func restoreAndRefresh() async {
+        await reloadCachedData()
+        guard let credentials = NessieCredentialStore.load() else { return }
+        await linkNessieAccount(apiKey: credentials.apiKey, customerID: credentials.customerID)
     }
 
     private func startAutomaticRefreshIfNeeded() {
@@ -146,6 +159,56 @@ final class BankAccountStore: ObservableObject {
                 guard !Task.isCancelled else { return }
                 await self?.refreshLinkedAccounts()
             }
+        }
+    }
+}
+
+private struct NessieCredentials: Codable {
+    let apiKey: String
+    let customerID: String
+}
+
+/// Keeps the refresh capability across app launches without putting the Nessie
+/// key in UserDefaults, the repository, logs, or source control.
+private enum NessieCredentialStore {
+    private static let service = "com.hackathon2026.finanzas.nessie"
+    private static let account = "active-customer"
+
+    static func load() -> NessieCredentials? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data else { return nil }
+        return try? JSONDecoder().decode(NessieCredentials.self, from: data)
+    }
+
+    static func save(_ credentials: NessieCredentials) throws {
+        let data = try JSONEncoder().encode(credentials)
+        let identity: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        let attributes: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        ]
+        let status = SecItemUpdate(identity as CFDictionary, attributes as CFDictionary)
+        if status == errSecItemNotFound {
+            var item = identity
+            attributes.forEach { item[$0.key] = $0.value }
+            let addStatus = SecItemAdd(item as CFDictionary, nil)
+            guard addStatus == errSecSuccess else {
+                throw BankingError.invalidConfiguration("Could not securely save Nessie credentials (Keychain status \(addStatus))")
+            }
+        } else if status != errSecSuccess {
+            throw BankingError.invalidConfiguration("Could not securely update Nessie credentials (Keychain status \(status))")
         }
     }
 }

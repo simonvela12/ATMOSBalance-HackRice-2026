@@ -18,11 +18,22 @@ public struct RepositorySyncCounts: Equatable, Sendable {
 public protocol FinancialDataRepository: Sendable {
     func persist(connection: BankConnection, accounts: [FinancialAccount],
                  transactions: [FinancialTransaction]) async throws -> RepositorySyncCounts
+    func replaceSnapshot(connection: BankConnection, accounts: [FinancialAccount],
+                         transactions: [FinancialTransaction],
+                         authoritativeTransactionAccountIDs: Set<String>) async throws -> RepositorySyncCounts
     func connections() async throws -> [BankConnection]
     func accounts() async throws -> [FinancialAccount]
     func transactions(from startDate: Date?, to endDate: Date?) async throws -> [FinancialTransaction]
     func transactions(accountID: String, from startDate: Date?,
                       to endDate: Date?) async throws -> [FinancialTransaction]
+}
+
+public extension FinancialDataRepository {
+    func replaceSnapshot(connection: BankConnection, accounts: [FinancialAccount],
+                         transactions: [FinancialTransaction],
+                         authoritativeTransactionAccountIDs: Set<String>) async throws -> RepositorySyncCounts {
+        try await persist(connection: connection, accounts: accounts, transactions: transactions)
+    }
 }
 
 public actor InMemoryFinancialRepository: FinancialDataRepository {
@@ -35,6 +46,63 @@ public actor InMemoryFinancialRepository: FinancialDataRepository {
     public func persist(connection: BankConnection, accounts: [FinancialAccount],
                         transactions: [FinancialTransaction]) throws -> RepositorySyncCounts {
         let counts = upsert(accounts: accounts, transactions: transactions)
+        connectionStorage[connection.id] = connection
+        return counts
+    }
+
+    public func replaceSnapshot(connection: BankConnection, accounts: [FinancialAccount],
+                                transactions: [FinancialTransaction],
+                                authoritativeTransactionAccountIDs: Set<String>) async throws -> RepositorySyncCounts {
+        let reconciledAccounts = accounts.map { incoming -> FinancialAccount in
+            guard incoming.provider == .nessie,
+                  authoritativeTransactionAccountIDs.contains(incoming.externalAccountID),
+                  let existing = accountStorage[incoming.id] else { return incoming }
+
+            let previousProviderBalance = existing.providerReportedBalanceMinorUnits
+                ?? existing.balanceMinorUnits
+            let incomingProviderBalance = incoming.providerReportedBalanceMinorUnits
+                ?? incoming.balanceMinorUnits
+
+            // If Nessie itself changed the reported balance, it is authoritative.
+            // Otherwise apply only the transaction delta observed since the last
+            // snapshot. Nessie's sandbox accepts purchases/deposits/transfers but
+            // currently leaves `account.balance` unchanged.
+            guard previousProviderBalance == incomingProviderBalance else { return incoming }
+
+            let previousTotal = transactionStorage.values.lazy
+                .filter { $0.provider == incoming.provider &&
+                    $0.externalCustomerID == incoming.externalCustomerID &&
+                    $0.externalAccountID == incoming.externalAccountID && !$0.isPending }
+                .reduce(Int64(0)) { $0 + $1.signedAmountMinorUnits }
+            let incomingTotal = transactions.lazy
+                .filter { $0.provider == incoming.provider &&
+                    $0.externalCustomerID == incoming.externalCustomerID &&
+                    $0.externalAccountID == incoming.externalAccountID && !$0.isPending }
+                .reduce(Int64(0)) { $0 + $1.signedAmountMinorUnits }
+
+            var adjusted = incoming
+            adjusted.balanceMinorUnits = existing.balanceMinorUnits + incomingTotal - previousTotal
+            return adjusted
+        }
+
+        let incomingAccountIDs = Set(accounts.map(\.id))
+        accountStorage = accountStorage.filter { _, account in
+            account.provider != connection.provider ||
+            account.externalCustomerID != connection.externalCustomerID ||
+            incomingAccountIDs.contains(account.id)
+        }
+
+        let incomingTransactionKeys = Set(transactions.map(\.deduplicationKey))
+        let incomingExternalAccountIDs = Set(accounts.map(\.externalAccountID))
+        transactionStorage = transactionStorage.filter { _, transaction in
+            guard transaction.provider == connection.provider,
+                  transaction.externalCustomerID == connection.externalCustomerID else { return true }
+            guard incomingExternalAccountIDs.contains(transaction.externalAccountID) else { return false }
+            guard authoritativeTransactionAccountIDs.contains(transaction.externalAccountID) else { return true }
+            return incomingTransactionKeys.contains(transaction.deduplicationKey)
+        }
+
+        let counts = upsert(accounts: reconciledAccounts, transactions: transactions)
         connectionStorage[connection.id] = connection
         return counts
     }
@@ -89,6 +157,7 @@ private extension FinancialAccount {
         provider == other.provider && externalAccountID == other.externalAccountID &&
         externalCustomerID == other.externalCustomerID && name == other.name &&
         accountType == other.accountType && balanceMinorUnits == other.balanceMinorUnits &&
+        providerReportedBalanceMinorUnits == other.providerReportedBalanceMinorUnits &&
         currencyCode == other.currencyCode
     }
 }

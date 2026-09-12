@@ -254,6 +254,30 @@ final class NessieIntegrationTests: XCTestCase {
         }
     }
 
+    func testCurrentAccountScopedTransferDoesNotDiscardOtherNessieTransactions() async throws {
+        var routes = fullRoutes
+        routes["/accounts/account-1/transfers"] = .json("""
+            [{"id":"transfer-current","transaction_date":"2026-09-12","amount":75,
+              "status":"completed","description":"Student savings transfer"}]
+            """)
+        let repository = InMemoryFinancialRepository()
+        let result = try await BankSyncService(
+            provider: NessieBankingProvider(
+                configuration: try configuration(),
+                transport: RoutingNessieTransport(routes: routes)
+            ),
+            repository: repository
+        ).syncAll()
+        let transactions = try await repository.transactions(from: nil, to: nil)
+
+        XCTAssertFalse(result.isPartial)
+        XCTAssertEqual(result.transactionsFetched, 5)
+        XCTAssertEqual(transactions.count, 5)
+        XCTAssertTrue(transactions.contains {
+            $0.externalTransactionID == "transfer:transfer-current:outflow" && $0.isTransfer
+        })
+    }
+
     private func configuration() throws -> NessieConfiguration {
         try NessieConfiguration(baseURL: URL(string: "https://api.nessieisreal.com"),
                                 apiKey: "test-key", customerID: "customer-123")

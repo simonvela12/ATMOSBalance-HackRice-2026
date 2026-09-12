@@ -8,10 +8,12 @@ public actor FileFinancialRepository: FinancialDataRepository {
     }
 
     private let fileURL: URL
+    private let allowedProviders: [BankingProviderID]?
     private var memory: InMemoryFinancialRepository
 
-    public init(fileURL: URL) throws {
+    public init(fileURL: URL, allowedProviders: [BankingProviderID]? = nil) throws {
         self.fileURL = fileURL
+        self.allowedProviders = allowedProviders
         self.memory = InMemoryFinancialRepository()
     }
 
@@ -20,7 +22,12 @@ public actor FileFinancialRepository: FinancialDataRepository {
         do {
             let data = try Data(contentsOf: fileURL)
             let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
-            let store = try decoder.decode(Store.self, from: data)
+            var store = try decoder.decode(Store.self, from: data)
+            if let allowedProviders {
+                store.connections.removeAll { !allowedProviders.contains($0.provider) }
+                store.accounts.removeAll { !allowedProviders.contains($0.provider) }
+                store.transactions.removeAll { !allowedProviders.contains($0.provider) }
+            }
             let rebuilt = InMemoryFinancialRepository()
             let transactionsByCustomer = Dictionary(grouping: store.transactions, by: \.externalCustomerID)
             for connection in store.connections {
@@ -29,6 +36,7 @@ public actor FileFinancialRepository: FinancialDataRepository {
                                               transactions: transactionsByCustomer[connection.externalCustomerID] ?? [])
             }
             self.memory = rebuilt
+            if allowedProviders != nil { try await writeToDisk() }
         } catch {
             throw BankingError.persistenceError("Could not read \(fileURL.path): \(error.localizedDescription)")
         }
@@ -36,7 +44,26 @@ public actor FileFinancialRepository: FinancialDataRepository {
 
     public func persist(connection: BankConnection, accounts: [FinancialAccount],
                         transactions: [FinancialTransaction]) async throws -> RepositorySyncCounts {
+        guard allowedProviders?.contains(connection.provider) ?? true else {
+            throw BankingError.persistenceError("Provider \(connection.provider.rawValue) is not allowed in this store")
+        }
         let counts = try await memory.persist(connection: connection, accounts: accounts, transactions: transactions)
+        try await writeToDisk()
+        return counts
+    }
+
+    public func replaceSnapshot(connection: BankConnection, accounts: [FinancialAccount],
+                                transactions: [FinancialTransaction],
+                                authoritativeTransactionAccountIDs: Set<String>) async throws -> RepositorySyncCounts {
+        guard allowedProviders?.contains(connection.provider) ?? true else {
+            throw BankingError.persistenceError("Provider \(connection.provider.rawValue) is not allowed in this store")
+        }
+        let counts = try await memory.replaceSnapshot(
+            connection: connection,
+            accounts: accounts,
+            transactions: transactions,
+            authoritativeTransactionAccountIDs: authoritativeTransactionAccountIDs
+        )
         try await writeToDisk()
         return counts
     }
