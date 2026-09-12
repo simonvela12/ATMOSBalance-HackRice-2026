@@ -7,10 +7,12 @@ struct WhatIfView: View {
     @State private var question = "Can I buy a new PC for $1500 now?"
     @State private var parsedScenario: WhatIfScenario?
     @State private var result: WhatIfResult?
+    @State private var narrative: String?
     @State private var isAnalyzing = false
     @State private var errorMessage: String?
 
     private let parser: any WhatIfParsing = WhatIfParserFactory.makeDefault()
+    private let narrator: any WhatIfNarrating = WhatIfNarratorFactory.makeDefault()
 
     var body: some View {
         NavigationStack {
@@ -33,7 +35,7 @@ struct WhatIfView: View {
                     }
                     .disabled(question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isAnalyzing)
 
-                    Text("Gemini extracts the scenario when configured; the financial logic stays local. If the API fails, the app falls back to the offline parser.")
+                    Text("Gemini extracts the scenario and explains the result when configured. The actual financial decision stays in the local engine, with offline fallbacks if the API is unavailable.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -80,7 +82,7 @@ struct WhatIfView: View {
 
                         LabeledContent("Remaining safe cash") {
                             Text(result.remainingAfterPurchase, format: .currency(code: "USD").precision(.fractionLength(0)))
-                                .foregroundStyle(result.remainingAfterPurchase >= 0 ? .primary : .red)
+                                .foregroundStyle(result.remainingAfterPurchase >= 0 ? Color.primary : Color.red)
                         }
 
                         if let recommendedDate = result.recommendedDate {
@@ -89,7 +91,7 @@ struct WhatIfView: View {
                             }
                         }
 
-                        Text(result.explanation)
+                        Text(narrative ?? result.explanation)
                             .foregroundStyle(.secondary)
                     }
 
@@ -144,9 +146,11 @@ struct WhatIfView: View {
         errorMessage = nil
         parsedScenario = nil
         result = nil
+        narrative = nil
 
         let input = question
         let parser = parser
+        let narrator = narrator
         let summary = summary
         let goals = goals
 
@@ -154,10 +158,12 @@ struct WhatIfView: View {
             do {
                 let scenario = try await parser.parseScenario(from: input)
                 let evaluation = WhatIfEvaluator(summary: summary, goals: goals).evaluate(scenario)
+                let explanation = await narrator.explain(scenario: scenario, result: evaluation)
 
                 await MainActor.run {
                     parsedScenario = scenario
                     result = evaluation
+                    narrative = explanation
                     isAnalyzing = false
                 }
             } catch {
