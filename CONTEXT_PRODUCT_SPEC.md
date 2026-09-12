@@ -27,6 +27,10 @@ Nothing that changes the plan should be applied silently. The app should interpr
 - Confidence UX is confirmed as: **Confirmed 100% / Likely 70% / Possible 30% / Custom %**.
 - Custom confidence accepts an explicit user-entered percentage such as 55%, 65%, or 80%.
 - For irregular income, expected-value planning may use `amount × confidence` while scenario views can remain conservative / expected / optimistic.
+- Variable recurring income is supported. The simple path uses one **expected amount per occurrence**.
+- Users who want more precision can optionally provide a **minimum and maximum amount** in addition to the expected amount.
+- The app must not force users to enter a range; the expected amount alone is sufficient.
+- When a range is supplied, the expected amount remains the normal planning value while the minimum/maximum can support conservative and optimistic views and make variability explicit.
 
 ### Expenses
 
@@ -81,6 +85,13 @@ Examples:
 - Amount
 - Date
 - Confidence: Confirmed 100% / Likely 70% / Possible 30% / Custom %
+
+**Variable recurring income**
+- Expected amount — required
+- Recurrence: Weekly / Every 2 weeks / Monthly
+- First or next expected date
+- Optional advanced range: Minimum amount / Maximum amount
+- Example: expected $550 every 2 weeks, optionally $450 minimum and $650 maximum
 
 **Someone owes me**
 - Original transaction anchor
@@ -163,6 +174,7 @@ Confidence behavior:
 2. Reimbursements can be partial. The user must explicitly provide the **amount expected back** and **repayment date**; the app never assumes full reimbursement. The original expense and later repayment stay as separate dated events so temporary liquidity risk remains visible.
 3. Future expenses can be created before they appear in bank data. Required inputs are **amount, date, whether the user must pay it, whether it can be reduced/canceled, and whether it recurs**. Recurrence choices are **No / Weekly / Every 2 weeks / Monthly**. Confirmed future expenses immediately affect the shared financial plan.
 4. If the user marks an expense as **Maybe** reducible/cancelable, the baseline forecast remains conservative and includes the **full amount**. The app may show up to that full amount as potential savings, but it does not assume any reduction until the user explicitly changes or cancels the expense.
+5. Variable recurring income uses a **required expected amount** plus an **optional minimum–maximum range**. The range is optional and should add precision without making the basic flow more complicated.
 
 ## Open decisions
 
