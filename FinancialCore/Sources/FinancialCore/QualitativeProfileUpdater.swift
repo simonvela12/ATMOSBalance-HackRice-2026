@@ -125,12 +125,16 @@ public enum QualitativeProfileUpdater {
                 from: result,
                 context: context
            ) {
-            let matches = updated.incomeEvents.filter {
-                $0.source == reimbursement.source && $0.date == reimbursement.date
+            let matchingIdentity = updated.incomeEvents.filter {
+                $0.source == reimbursement.source &&
+                $0.date == reimbursement.date &&
+                abs($0.amount - reimbursement.amount) <= 0.000_001
             }
-            if matches.count != 1 || !sameFinancialIncome(matches[0], reimbursement) {
+            if matchingIdentity.count != 1 || !sameFinancialIncome(matchingIdentity[0], reimbursement) {
                 updated.incomeEvents.removeAll {
-                    $0.source == reimbursement.source && $0.date == reimbursement.date
+                    $0.source == reimbursement.source &&
+                    $0.date == reimbursement.date &&
+                    abs($0.amount - reimbursement.amount) <= 0.000_001
                 }
                 updated.incomeEvents.append(reimbursement)
                 didChange = true
