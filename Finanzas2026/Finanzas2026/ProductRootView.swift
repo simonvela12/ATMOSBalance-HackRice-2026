@@ -231,8 +231,8 @@ private struct CalendarProductView: View {
                     VStack(alignment: .leading, spacing: 16) {
                         productHeader(
                             eyebrow: "CALENDAR",
-                            title: "Financial weather",
-                            subtitle: "Weather describes the health of your plan — not whether spending itself is good or bad."
+                            title: "Future cash health",
+                            subtitle: "See when your projected cash path is comfortable, tight, or below a protected minimum."
                         )
 
                         HStack(spacing: 10) {
@@ -283,9 +283,9 @@ private struct CalendarProductView: View {
                         .productCard()
 
                         explanationCard(
-                            icon: "cloud.sun.fill",
-                            title: "A big bill can still be a sunny day",
-                            text: "Rent or tuition does not turn a day red just because the amount is large. A day becomes tight or not safe only when the payment pushes your plan through a financial boundary."
+                            icon: "checkmark.shield.fill",
+                            title: "A big bill can still leave the plan healthy",
+                            text: "Rent or tuition does not make a day unsafe just because the amount is large. A day becomes tight or not safe only when the payment pushes your cash path through a financial boundary."
                         )
                     }
                     .padding(20)
@@ -543,6 +543,7 @@ private struct ContextProductView: View {
     @State private var noteText = ProductDemo.contextItems[0].suggestedText
     @State private var interpretation: QualitativeParseResult?
     @State private var confirmationMessage: String?
+    @State private var confirmationDidChange = false
 
     private var selectedItem: ProductDemo.ContextItem {
         ProductDemo.contextItems.first(where: { $0.id == selectedItemID }) ?? ProductDemo.contextItems[0]
@@ -569,9 +570,12 @@ private struct ContextProductView: View {
                         }
 
                         if let confirmationMessage {
-                            Label(confirmationMessage, systemImage: "checkmark.circle.fill")
+                            Label(
+                                confirmationMessage,
+                                systemImage: confirmationDidChange ? "checkmark.circle.fill" : "checkmark.circle"
+                            )
                                 .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.green)
+                                .foregroundStyle(confirmationDidChange ? Color.green : Color.white.opacity(0.7))
                                 .padding(16)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .productCard()
@@ -593,6 +597,7 @@ private struct ContextProductView: View {
                 noteText = item.suggestedText
                 interpretation = nil
                 confirmationMessage = nil
+                confirmationDidChange = false
             }
         }
     }
@@ -650,6 +655,7 @@ private struct ContextProductView: View {
 
             Button {
                 confirmationMessage = nil
+                confirmationDidChange = false
                 interpretation = QualitativeNoteInterpreter.parse(
                     noteText,
                     context: selectedItem.context,
@@ -698,7 +704,7 @@ private struct ContextProductView: View {
                 Button {
                     apply(result, to: selectedItem)
                 } label: {
-                    Text("Confirm and update my plan")
+                    Text("Confirm interpretation")
                         .font(.headline)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 13)
@@ -713,124 +719,22 @@ private struct ContextProductView: View {
     }
 
     private func apply(_ result: QualitativeParseResult, to item: ProductDemo.ContextItem) {
-        var updated = profile
+        let application = QualitativeProfileUpdater.apply(
+            result,
+            to: profile,
+            context: item.context,
+            goalID: item.goalID,
+            through: ProductDemo.horizon,
+            reserveNote: "Confirmed context: \(item.title)",
+            calendar: ProductDemo.calendar
+        )
 
-        for directive in result.directives {
-            switch directive {
-            case .setIncomeType(let type):
-                if type == .oneTime {
-                    updated.incomeEvents.removeAll { $0.source == item.title && $0.date > updated.asOfDate }
-                }
-
-            case .setIrregularIncomeConfidence(let confidence):
-                updated.incomeEvents = updated.incomeEvents.map { event in
-                    guard event.source == item.title else { return event }
-                    return IncomeEvent(
-                        id: event.id,
-                        amount: event.amount,
-                        date: event.date,
-                        source: event.source,
-                        type: .irregular,
-                        confidence: confidence
-                    )
-                }
-
-            case .setExpenseCommitted(let committed):
-                updated.expenseEvents = updated.expenseEvents.map { event in
-                    guard event.category == item.title else { return event }
-                    return ExpenseEvent(
-                        id: event.id,
-                        amount: event.amount,
-                        date: event.date,
-                        category: event.category,
-                        essential: event.essential,
-                        committed: committed,
-                        reimbursable: event.reimbursable,
-                        extraordinary: event.extraordinary
-                    )
-                }
-
-            case .setExpenseEssential(let essential):
-                updated.expenseEvents = updated.expenseEvents.map { event in
-                    guard event.category == item.title else { return event }
-                    return ExpenseEvent(
-                        id: event.id,
-                        amount: event.amount,
-                        date: event.date,
-                        category: event.category,
-                        essential: essential,
-                        committed: event.committed,
-                        reimbursable: event.reimbursable,
-                        extraordinary: event.extraordinary
-                    )
-                }
-
-            case .setGoalPriority(let priority):
-                guard let goalID = item.goalID,
-                      let index = updated.goals.firstIndex(where: { $0.id == goalID }) else { break }
-                let goal = updated.goals[index]
-                updated.goals[index] = Goal(
-                    id: goal.id,
-                    name: goal.name,
-                    targetAmount: goal.targetAmount,
-                    amountAlreadyPaid: goal.amountAlreadyPaid,
-                    deadline: goal.deadline,
-                    priority: priority
-                )
-
-            case .expectReimbursement, .setRecurrence, .setPersonalReserve:
-                break
-            }
-        }
-
-        if let reimbursement = QualitativeDirectiveMaterializer.reimbursementIncome(
-            from: result,
-            context: item.context
-        ) {
-            updated.incomeEvents.removeAll {
-                $0.source == reimbursement.source && $0.date == reimbursement.date
-            }
-            updated.incomeEvents.append(reimbursement)
-        }
-
-        if item.kind == .income,
-           let recurring = try? QualitativeDirectiveMaterializer.recurringIncomeEvents(
-                from: result,
-                context: item.context,
-                asOfDate: updated.asOfDate,
-                through: ProductDemo.horizon,
-                calendar: ProductDemo.calendar
-           ),
-           !recurring.isEmpty {
-            updated.incomeEvents.removeAll { $0.source == item.title && $0.date > updated.asOfDate }
-            updated.incomeEvents.append(contentsOf: recurring)
-        }
-
-        if item.kind == .expense,
-           let recurring = try? QualitativeDirectiveMaterializer.recurringExpenseEvents(
-                from: result,
-                context: item.context,
-                asOfDate: updated.asOfDate,
-                through: ProductDemo.horizon,
-                essential: true,
-                committed: true,
-                calendar: ProductDemo.calendar
-           ),
-           !recurring.isEmpty {
-            updated.expenseEvents.removeAll { $0.category == item.title && $0.date > updated.asOfDate }
-            updated.expenseEvents.append(contentsOf: recurring)
-        }
-
-        let reserveNote = "Confirmed context: \(item.title)"
-        let steps = QualitativeDirectiveMaterializer.reserveSteps(from: result, note: reserveNote)
-        if !steps.isEmpty {
-            updated.personalReserveSteps.removeAll { $0.note == reserveNote }
-            updated.personalReserveSteps.append(contentsOf: steps)
-        }
-
-        profile = updated
+        profile = application.profile
         interpretation = nil
-        confirmationMessage = "Plan updated. Home, Calendar, Plans, and What If now use this context."
+        confirmationDidChange = application.didChange
+        confirmationMessage = application.didChange
+            ? "Plan updated. Home, Calendar, Plans, and What If now use this context."
+            : "No changes needed. Your plan already reflects this context."
     }
 }
 
@@ -1124,9 +1028,9 @@ private func healthTitle(_ status: FinancialHealthStatus) -> String {
 
 private func healthSymbol(_ status: FinancialHealthStatus) -> String {
     switch status {
-    case .safe: return "sun.max.fill"
-    case .tight: return "cloud.sun.fill"
-    case .notSafe: return "cloud.bolt.rain.fill"
+    case .safe: return "checkmark.circle.fill"
+    case .tight: return "exclamationmark.circle.fill"
+    case .notSafe: return "xmark.octagon.fill"
     }
 }
 
