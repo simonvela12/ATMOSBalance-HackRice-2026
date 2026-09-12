@@ -115,4 +115,72 @@ final class WhatIfAnalysisTests: XCTestCase {
         XCTAssertEqual(result.goalImpacts[0].after.status, .tight)
         XCTAssertTrue(result.goalImpacts[0].worsened)
     }
+
+    func testGoalCanWorsenWithoutChangingHealthBand() throws {
+        let asOf = date(2026, 9, 1)
+        let goal = Goal(
+            name: "Trip",
+            targetAmount: 400,
+            deadline: date(2026, 9, 20),
+            priority: .flexible
+        )
+        let profile = FinancialProfile(
+            currentCash: 1000,
+            asOfDate: asOf,
+            personalReserveSteps: [
+                PersonalReserveStep(effectiveDate: asOf, minimumCash: 500)
+            ],
+            goals: [goal],
+            spendingPolicy: SpendingPolicy(bufferWeeks: 0, manualMinimumBuffer: 200)
+        )
+
+        let result = try FinancialInsights.analyzePurchaseWhatIf(
+            profile: profile,
+            amount: 50,
+            purchaseDate: asOf,
+            planningHorizon: date(2026, 9, 20),
+            calendar: calendar
+        )
+
+        let impact = try XCTUnwrap(result.goalImpacts.first)
+        XCTAssertEqual(impact.before.status, .tight)
+        XCTAssertEqual(impact.after.status, .tight)
+        XCTAssertEqual(impact.before.shortfallToRecommendedFloor, 100, accuracy: 0.001)
+        XCTAssertEqual(impact.after.shortfallToRecommendedFloor, 150, accuracy: 0.001)
+        XCTAssertTrue(impact.worsened)
+        XCTAssertEqual(result.worsenedGoals.map { $0.goal.name }, ["Trip"])
+    }
+
+    func testUnchangedSameBandGoalIsNotReportedAsWorse() throws {
+        let asOf = date(2026, 9, 1)
+        let goal = Goal(
+            name: "Trip",
+            targetAmount: 400,
+            deadline: date(2026, 9, 20),
+            priority: .flexible
+        )
+        let profile = FinancialProfile(
+            currentCash: 1000,
+            asOfDate: asOf,
+            personalReserveSteps: [
+                PersonalReserveStep(effectiveDate: asOf, minimumCash: 500)
+            ],
+            goals: [goal],
+            spendingPolicy: SpendingPolicy(bufferWeeks: 0, manualMinimumBuffer: 200)
+        )
+
+        let result = try FinancialInsights.analyzePurchaseWhatIf(
+            profile: profile,
+            amount: 0,
+            purchaseDate: asOf,
+            planningHorizon: date(2026, 9, 20),
+            calendar: calendar
+        )
+
+        let impact = try XCTUnwrap(result.goalImpacts.first)
+        XCTAssertEqual(impact.before.status, .tight)
+        XCTAssertEqual(impact.after.status, .tight)
+        XCTAssertFalse(impact.worsened)
+        XCTAssertTrue(result.worsenedGoals.isEmpty)
+    }
 }
