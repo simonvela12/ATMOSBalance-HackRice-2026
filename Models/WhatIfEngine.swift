@@ -2,7 +2,7 @@ import Foundation
 
 /// Temporary What-If engine used while the full FinancialEngine is being integrated.
 /// The UI talks only to this type, so we can later swap the internals without rewriting the screen.
-struct WhatIfEngine {
+struct WhatIfEngine: Sendable {
     enum EngineError: LocalizedError, Equatable {
         case emptyQuestion
         case missingAmount
