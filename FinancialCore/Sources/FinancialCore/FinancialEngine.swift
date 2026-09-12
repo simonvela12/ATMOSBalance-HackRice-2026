@@ -85,11 +85,14 @@ public enum FinancialEngine {
             .reduce(0) { $0 + max(0, $1.amount) }
     }
 
+    /// Remaining mandatory goals are future obligations even when their deadline has
+    /// already passed. An overdue unpaid goal is therefore treated as immediately due
+    /// rather than disappearing from the forecast.
     public static func mandatoryGoalPayments(profile: FinancialProfile, targetDate: Date) -> Double {
         profile.goals
             .filter {
                 $0.priority == .mandatory &&
-                $0.deadline > profile.asOfDate &&
+                $0.remainingAmount > 0 &&
                 $0.deadline <= targetDate
             }
             .reduce(0) { $0 + $1.remainingAmount }
@@ -329,11 +332,14 @@ public enum FinancialEngine {
         planningHorizon: Date,
         calendar: Calendar = .current
     ) throws -> FlexibleGoalAssessment {
+        // An overdue flexible goal is a decision the user can make now; it should not
+        // become impossible to assess merely because its preferred date has passed.
+        let effectiveDate = max(goal.deadline, profile.asOfDate)
         let assessment = try assessPurchase(
             profile: profile,
             amount: goal.remainingAmount,
-            purchaseDate: goal.deadline,
-            planningHorizon: max(goal.deadline, planningHorizon),
+            purchaseDate: effectiveDate,
+            planningHorizon: max(effectiveDate, planningHorizon),
             calendar: calendar
         )
         return FlexibleGoalAssessment(goal: goal, purchaseAssessment: assessment)
