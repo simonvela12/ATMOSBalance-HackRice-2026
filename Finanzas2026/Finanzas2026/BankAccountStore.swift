@@ -22,7 +22,7 @@ final class BankAccountStore: ObservableObject {
     private var automaticRefreshTask: Task<Void, Never>?
     private let automaticRefreshInterval: Duration
 
-    init(automaticRefreshInterval: Duration = .seconds(15 * 60)) {
+    init(automaticRefreshInterval: Duration = .seconds(60)) {
         self.automaticRefreshInterval = automaticRefreshInterval
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let storeURL = support
