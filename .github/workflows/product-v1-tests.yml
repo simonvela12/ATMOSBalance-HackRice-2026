@@ -6,6 +6,7 @@ on:
       - product-v1-cleanup
       - product-v1-cleanup-v2
       - product-v1.2
+      - product-v1.2-context-v2-core
   workflow_dispatch:
 
 jobs:
