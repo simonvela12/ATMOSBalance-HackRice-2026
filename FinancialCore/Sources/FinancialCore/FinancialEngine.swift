@@ -76,9 +76,9 @@ public enum FinancialEngine {
             .reduce(0) { $0 + $1.remainingAmount }
     }
 
-    /// The amount of the current balance that must remain untouched on a date.
-    /// Personal/institutional minimums share the same base floor, while must-happen
-    /// goals are additional commitments with their own deadlines.
+    /// The amount that must remain untouched on a date. Personal/institutional
+    /// minimums share the same base floor, while future must-happen goals are
+    /// additional commitments with their own deadlines.
     public static func hardFloor(profile: FinancialProfile, on date: Date) -> Double {
         let baseFloor = max(
             personalReserve(profile: profile, on: date),
@@ -87,12 +87,19 @@ public enum FinancialEngine {
         return baseFloor + protectedMandatoryGoals(profile: profile, on: date)
     }
 
+    /// Everything in today's account balance that is unavailable for discretionary
+    /// spending: the current hard floor plus mandatory goals already due today.
+    public static func protectedCashToday(profile: FinancialProfile) -> Double {
+        hardFloor(profile: profile, on: profile.asOfDate)
+            + mandatoryGoalPayments(profile: profile, targetDate: profile.asOfDate)
+    }
+
     /// Money from the current account balance that is liquid today after every hard
     /// protection is honored. This deliberately excludes the optional safety buffer:
     /// the remainder is the user's actual spendable balance; the buffer can still
     /// downgrade a purchase from safe to tight.
     public static func liquidCashToday(profile: FinancialProfile) -> Double {
-        max(0, profile.currentCash - hardFloor(profile: profile, on: profile.asOfDate))
+        max(0, profile.currentCash - protectedCashToday(profile: profile))
     }
 
     public static func expectedIncome(profile: FinancialProfile, targetDate: Date) -> Double {
