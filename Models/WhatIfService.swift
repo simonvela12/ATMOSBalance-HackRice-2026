@@ -17,8 +17,6 @@ enum WhatIfParserFactory {
     }
 }
 
-/// Tries the online parser first and silently falls back to the local parser.
-/// This keeps the hackathon demo usable even if Wi-Fi or the API is unavailable.
 struct FallbackWhatIfParser: WhatIfParsing {
     let primary: any WhatIfParsing
     let fallback: any WhatIfParsing
@@ -32,7 +30,6 @@ struct FallbackWhatIfParser: WhatIfParsing {
     }
 }
 
-/// Offline fallback. It keeps the demo usable even if Gemini is not configured or the network is unavailable.
 struct LocalWhatIfParser: WhatIfParsing {
     private let engine = WhatIfEngine()
 
@@ -41,8 +38,6 @@ struct LocalWhatIfParser: WhatIfParsing {
     }
 }
 
-/// Lightweight Gemini REST client whose only job is to turn natural language into a structured scenario.
-/// It does NOT decide whether the user can afford the purchase.
 struct GeminiWhatIfParser: WhatIfParsing {
     enum ServiceError: LocalizedError {
         case invalidResponse
@@ -186,9 +181,15 @@ struct GeminiWhatIfParser: WhatIfParsing {
 
 struct WhatIfEvaluator {
     let summary: FinancialSummary
+    let goals: [FinancialGoal]
     private let engine = WhatIfEngine()
 
+    init(summary: FinancialSummary, goals: [FinancialGoal] = []) {
+        self.summary = summary
+        self.goals = goals
+    }
+
     func evaluate(_ scenario: WhatIfScenario) -> WhatIfResult {
-        engine.evaluate(scenario: scenario, summary: summary)
+        engine.evaluate(scenario: scenario, summary: summary, goals: goals)
     }
 }
