@@ -7,7 +7,7 @@ public struct NessieConfiguration: Sendable {
 
     public init(baseURL: URL? = nil,
                 apiKey: String, customerID: String) throws {
-        guard let resolvedBaseURL = baseURL ?? URL(string: "http://api.nessieisreal.com") else {
+        guard let resolvedBaseURL = baseURL ?? URL(string: "https://api.nessieisreal.com") else {
             throw BankingError.invalidConfiguration("Default Nessie URL is invalid")
         }
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {

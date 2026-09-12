@@ -100,6 +100,42 @@ final class FinanceCoreTests: XCTestCase {
         }
     }
 
+    func testKnownNessieWithdrawalSchemaErrorDoesNotBlockOtherAccountData() async throws {
+        let baseURL = try XCTUnwrap(URL(string: "https://example.test"))
+        let configuration = try NessieConfiguration(
+            baseURL: baseURL,
+            apiKey: "test-key",
+            customerID: "customer-1"
+        )
+        let provider = NessieBankingProvider(
+            configuration: configuration,
+            transport: WithdrawalSchemaErrorTransport()
+        )
+
+        let accounts = try await provider.fetchAccounts()
+        let account = try XCTUnwrap(accounts.first)
+        let transactions = try await provider.fetchTransactions(for: account)
+
+        XCTAssertTrue(transactions.isEmpty)
+    }
+
+    func testNessieNoTransactionsFoundIsAnEmptyCollection() async throws {
+        let baseURL = try XCTUnwrap(URL(string: "https://example.test"))
+        let configuration = try NessieConfiguration(
+            baseURL: baseURL,
+            apiKey: "test-key",
+            customerID: "customer-1"
+        )
+        let client = NessieAPIClient(
+            configuration: configuration,
+            transport: NoTransactionsFoundTransport()
+        )
+
+        let transfers: [NessieTransfer] = try await client.transfers(accountID: "account-1")
+
+        XCTAssertTrue(transfers.isEmpty)
+    }
+
     private func fixture<T: Decodable>(_ name: String) throws -> T {
         let url = try XCTUnwrap(Bundle.module.url(forResource: name, withExtension: "json"))
         return try JSONDecoder().decode(T.self, from: Data(contentsOf: url))
@@ -111,6 +147,46 @@ final class FinanceCoreTests: XCTestCase {
                                 transactionDate: Date(timeIntervalSince1970: 1_700_000_000),
                                 description: description, sourceType: .purchase, direction: .outflow,
                                 amountMinorUnits: amount)
+    }
+}
+
+private actor WithdrawalSchemaErrorTransport: NessieTransport {
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let url = try XCTUnwrap(request.url)
+        let statusCode: Int
+        let body: String
+
+        if url.path.hasSuffix("/withdrawals") {
+            statusCode = 400
+            body = #"{"error":"1 validation error for Withdrawal\\nstatus\\n field required (type=value_error.missing)"}"#
+        } else if url.path.hasSuffix("/accounts") {
+            statusCode = 200
+            body = #"[{"_id":"account-1","type":"Checking","nickname":"Test","balance":100,"customer_id":"customer-1"}]"#
+        } else {
+            statusCode = 200
+            body = "[]"
+        }
+
+        let response = try XCTUnwrap(HTTPURLResponse(
+            url: url,
+            statusCode: statusCode,
+            httpVersion: nil,
+            headerFields: nil
+        ))
+        return (Data(body.utf8), response)
+    }
+}
+
+private actor NoTransactionsFoundTransport: NessieTransport {
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let url = try XCTUnwrap(request.url)
+        let response = try XCTUnwrap(HTTPURLResponse(
+            url: url,
+            statusCode: 404,
+            httpVersion: nil,
+            headerFields: nil
+        ))
+        return (Data(#""No transfers found for this account""#.utf8), response)
     }
 }
 

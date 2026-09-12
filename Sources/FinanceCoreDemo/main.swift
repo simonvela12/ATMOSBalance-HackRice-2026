@@ -9,7 +9,7 @@ struct FinanceCoreDemo {
         let process = ProcessInfo.processInfo.environment
         let apiKey = process["NESSIE_API_KEY"] ?? values["NESSIE_API_KEY"] ?? ""
         let baseURLText = process["NESSIE_BASE_URL"] ?? values["NESSIE_BASE_URL"]
-            ?? "http://api.nessieisreal.com"
+            ?? "https://api.nessieisreal.com"
         var customerID = process["NESSIE_CUSTOMER_ID"] ?? values["NESSIE_CUSTOMER_ID"] ?? ""
 
         if customerID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

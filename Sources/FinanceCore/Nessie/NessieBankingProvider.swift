@@ -29,7 +29,9 @@ public struct NessieBankingProvider: BankingProvider, Sendable {
     public func fetchTransactions(for account: ExternalBankAccount) async throws -> [ExternalBankTransaction] {
         async let purchasesRequest = client.purchases(accountID: account.externalAccountID)
         async let depositsRequest = client.deposits(accountID: account.externalAccountID)
-        async let withdrawalsRequest = client.withdrawals(accountID: account.externalAccountID)
+        async let withdrawalsRequest = withdrawalsToleratingKnownNessieSchemaBug(
+            accountID: account.externalAccountID
+        )
         async let transfersRequest = client.transfers(accountID: account.externalAccountID)
         let (purchases, deposits, withdrawals, transfers) = try await
             (purchasesRequest, depositsRequest, withdrawalsRequest, transfersRequest)
@@ -47,5 +49,27 @@ public struct NessieBankingProvider: BankingProvider, Sendable {
         normalized += try withdrawals.map { try NessieMapper.withdrawal($0, account: account) }
         normalized += try transfers.map { try NessieMapper.transfer($0, account: account) }
         return normalized
+    }
+
+    private func withdrawalsToleratingKnownNessieSchemaBug(
+        accountID: String
+    ) async throws -> [NessieWithdrawal] {
+        do {
+            return try await client.withdrawals(accountID: accountID)
+        } catch BankingError.serverError(let statusCode, let message)
+            where statusCode == 400 && Self.isMissingWithdrawalStatus(message) {
+            // Some Nessie sandbox accounts contain legacy withdrawals without the
+            // now-required status field. Nessie's server rejects the whole collection.
+            // Keep the usable account/purchase/deposit/transfer data instead of failing
+            // the complete sync. Current balances still include those withdrawals.
+            return []
+        }
+    }
+
+    private static func isMissingWithdrawalStatus(_ message: String?) -> Bool {
+        let normalized = message?.lowercased() ?? ""
+        return normalized.contains("withdraw") &&
+            normalized.contains("status") &&
+            (normalized.contains("field required") || normalized.contains("validation error"))
     }
 }

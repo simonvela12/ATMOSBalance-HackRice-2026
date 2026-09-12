@@ -35,23 +35,37 @@ public struct NessieAPIClient: Sendable {
     }
 
     func purchases(accountID: String) async throws -> [NessiePurchase] {
-        try await get("accounts/\(accountID)/purchases")
+        try await getCollection("accounts/\(accountID)/purchases")
     }
 
     func deposits(accountID: String) async throws -> [NessieDeposit] {
-        try await get("accounts/\(accountID)/deposits")
+        try await getCollection("accounts/\(accountID)/deposits")
     }
 
     func withdrawals(accountID: String) async throws -> [NessieWithdrawal] {
-        try await get("accounts/\(accountID)/withdrawals")
+        try await getCollection("accounts/\(accountID)/withdrawals")
     }
 
     func transfers(accountID: String) async throws -> [NessieTransfer] {
-        try await get("accounts/\(accountID)/transfers")
+        try await getCollection("accounts/\(accountID)/transfers")
     }
 
     func merchant(id: String) async throws -> NessieMerchant {
         try await get("merchants/\(id)")
+    }
+
+    private func getCollection<T: Decodable>(_ path: String) async throws -> [T] {
+        do {
+            return try await get(path)
+        } catch BankingError.serverError(let statusCode, let message)
+            where statusCode == 404 && Self.isEmptyCollectionResponse(message) {
+            return []
+        }
+    }
+
+    private static func isEmptyCollectionResponse(_ message: String?) -> Bool {
+        let normalized = message?.lowercased() ?? ""
+        return normalized.contains("no ") && normalized.contains(" found")
     }
 
     private func get<T: Decodable>(_ path: String) async throws -> T {
