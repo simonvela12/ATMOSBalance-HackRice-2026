@@ -132,8 +132,10 @@ struct PurchaseAssessment {
     let status: Status
     let purchaseAmount: Double
     let purchaseDate: Date
-    let safeToSpendBeforePurchase: Double
-    let remainingAfterPurchase: Double
+    let planningHorizon: Date
+    let safeToSpendOnPurchaseDate: Double
+    let minimumSafeToSpendThroughHorizon: Double
+    let remainingAtTightestPoint: Double
     let shortfall: Double
     let recommendedDate: Date?
 }
@@ -210,28 +212,69 @@ enum FinancialEngine {
         )
     }
 
+    /// Returns the tightest safe-to-spend amount between two dates.
+    /// A proposed purchase must fit inside this minimum, not just today's balance,
+    /// so later bills and mandatory goals are protected.
+    static func minimumSafeToSpend(
+        profile: FinancialProfile,
+        from startDate: Date,
+        through endDate: Date,
+        calendar: Calendar = .current
+    ) throws -> Double {
+        guard endDate >= startDate else {
+            throw FinancialEngineError.invalidDateRange
+        }
+
+        var currentDate = startDate
+        var minimumValue = Double.greatestFiniteMagnitude
+
+        while currentDate <= endDate {
+            let value = try forecast(profile: profile, targetDate: currentDate).safeToSpend
+            minimumValue = min(minimumValue, value)
+
+            guard let nextDate = calendar.date(byAdding: .day, value: 1, to: currentDate) else {
+                break
+            }
+            currentDate = nextDate
+        }
+
+        return minimumValue
+    }
+
     static func assessPurchase(
         profile: FinancialProfile,
         amount: Double,
         purchaseDate: Date,
-        searchUntil: Date? = nil
+        planningHorizon: Date,
+        calendar: Calendar = .current
     ) throws -> PurchaseAssessment {
         guard amount >= 0 else {
             throw FinancialEngineError.negativePurchaseAmount
         }
+        guard planningHorizon >= purchaseDate else {
+            throw FinancialEngineError.invalidDateRange
+        }
 
-        let result = try forecast(profile: profile, targetDate: purchaseDate)
-        let remaining = result.safeToSpend - amount
+        let purchaseDateForecast = try forecast(profile: profile, targetDate: purchaseDate)
+        let tightestSafeToSpend = try minimumSafeToSpend(
+            profile: profile,
+            from: purchaseDate,
+            through: planningHorizon,
+            calendar: calendar
+        )
+
+        let remaining = tightestSafeToSpend - amount
         let status: PurchaseAssessment.Status = remaining >= 0 ? .safe : .wait
         let shortfall = max(0, -remaining)
 
         var recommendedDate: Date? = nil
-        if status == .wait, let searchUntil {
+        if status == .wait {
             recommendedDate = try earliestSafePurchaseDate(
                 profile: profile,
                 amount: amount,
                 startDate: purchaseDate,
-                endDate: searchUntil
+                planningHorizon: planningHorizon,
+                calendar: calendar
             )
         }
 
@@ -239,8 +282,10 @@ enum FinancialEngine {
             status: status,
             purchaseAmount: amount,
             purchaseDate: purchaseDate,
-            safeToSpendBeforePurchase: result.safeToSpend,
-            remainingAfterPurchase: remaining,
+            planningHorizon: planningHorizon,
+            safeToSpendOnPurchaseDate: purchaseDateForecast.safeToSpend,
+            minimumSafeToSpendThroughHorizon: tightestSafeToSpend,
+            remainingAtTightestPoint: remaining,
             shortfall: shortfall,
             recommendedDate: recommendedDate
         )
@@ -250,24 +295,30 @@ enum FinancialEngine {
         profile: FinancialProfile,
         amount: Double,
         startDate: Date,
-        endDate: Date,
+        planningHorizon: Date,
         calendar: Calendar = .current
     ) throws -> Date? {
-        guard endDate >= startDate else {
+        guard planningHorizon >= startDate else {
             throw FinancialEngineError.invalidDateRange
         }
 
-        var currentDate = startDate
-        while currentDate <= endDate {
-            let result = try forecast(profile: profile, targetDate: currentDate)
-            if result.safeToSpend >= amount {
-                return currentDate
+        var candidateDate = startDate
+        while candidateDate <= planningHorizon {
+            let tightestSafeToSpend = try minimumSafeToSpend(
+                profile: profile,
+                from: candidateDate,
+                through: planningHorizon,
+                calendar: calendar
+            )
+
+            if tightestSafeToSpend >= amount {
+                return candidateDate
             }
 
-            guard let nextDate = calendar.date(byAdding: .day, value: 1, to: currentDate) else {
+            guard let nextDate = calendar.date(byAdding: .day, value: 1, to: candidateDate) else {
                 break
             }
-            currentDate = nextDate
+            candidateDate = nextDate
         }
 
         return nil
