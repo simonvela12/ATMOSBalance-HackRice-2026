@@ -124,7 +124,7 @@ final class QualitativeProfileUpdaterTests: XCTestCase {
 
         XCTAssertTrue(application.didChange)
         XCTAssertEqual(application.profile.incomeEvents.first?.type, .irregular)
-        XCTAssertEqual(application.profile.incomeEvents.first?.confidence, 0.6, accuracy: 0.000_001)
+        XCTAssertEqual(application.profile.incomeEvents.first?.confidence ?? -1, 0.6, accuracy: 0.000_001)
     }
 
     func testConfirmingSameRecurringInterpretationTwiceIsIdempotent() {
