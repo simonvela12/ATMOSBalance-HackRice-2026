@@ -1,7 +1,13 @@
+# macOS
 .DS_Store
-DerivedData/
-*.xcuserstate
+
+# Xcode user-specific files
 xcuserdata/
+*.xcuserstate
 *.moved-aside
 *.xccheckout
 *.xcscmblueprint
+
+# Build output
+DerivedData/
+build/
