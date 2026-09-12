@@ -23,7 +23,7 @@ public struct AccountBalanceSnapshot: Codable, Identifiable, Sendable, Equatable
 /// the source of truth for verified/declared goal progress; whenever that value is
 /// lower than a previous plan expected, the next evaluation naturally increases
 /// the required contribution because less time remains.
-public struct ShortTermGoalContribution: Sendable, Equatable {
+public struct ShortTermGoalContribution: Sendable {
     public let goalID: UUID
     public let goalName: String
     public let deadline: Date
