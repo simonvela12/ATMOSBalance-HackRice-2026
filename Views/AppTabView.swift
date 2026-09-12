@@ -12,7 +12,7 @@ struct AppTabView: View {
             PlansView(goals: MockData.goals)
                 .tabItem { Label("Plans", systemImage: "target") }
 
-            WhatIfView(summary: MockData.summary)
+            WhatIfView(summary: MockData.summary, goals: MockData.goals)
                 .tabItem { Label("What If", systemImage: "slider.horizontal.3") }
         }
         .tint(.indigo)
