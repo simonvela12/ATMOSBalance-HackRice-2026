@@ -1,7 +1,8 @@
 import Foundation
 
 /// Temporary What-If engine used while the full FinancialEngine is being integrated.
-/// The UI talks only to this type, so we can later swap the internals without rewriting the screen.
+/// The UI talks only to this type, so Lucas's final forecasting math can replace
+/// the internals without rewriting the screen or the LLM parsing layer.
 struct WhatIfEngine: Sendable {
     enum EngineError: LocalizedError, Equatable {
         case emptyQuestion
@@ -36,40 +37,156 @@ struct WhatIfEngine: Sendable {
         )
     }
 
-    func evaluate(scenario: WhatIfScenario, summary: FinancialSummary) -> WhatIfResult {
-        // Temporary rule: use the November discretionary budget already exposed by FinancialSummary.
-        // Lucas's FinancialEngine will replace this calculation later.
+    func evaluate(
+        scenario: WhatIfScenario,
+        summary: FinancialSummary,
+        goals: [FinancialGoal] = [],
+        calendar: Calendar = .current
+    ) -> WhatIfResult {
         let available = max(0, summary.safeToSpendThroughNovember)
         let remaining = available - scenario.amount
-        let isSafe = remaining >= 0
+        let shortfall = max(0, -remaining)
 
-        let recommendation: Date?
-        if isSafe {
-            recommendation = nil
+        let impacts = calculateGoalImpacts(
+            shortfall: shortfall,
+            goals: goals,
+            calendar: calendar
+        )
+
+        let accessibleGoalFunds = goals
+            .filter { !$0.isProtected }
+            .reduce(0) { $0 + $1.currentSaved }
+
+        let status: WhatIfResult.Status
+        if shortfall == 0 {
+            status = .safe
+        } else if accessibleGoalFunds >= shortfall {
+            status = .tradeOff
         } else {
-            recommendation = Calendar.current.date(byAdding: .day, value: 30, to: scenario.intendedDate ?? Date())
+            status = .wait
+        }
+
+        let recommendedDate: Date?
+        if status == .wait {
+            recommendedDate = calendar.date(byAdding: .day, value: 30, to: scenario.intendedDate ?? Date())
+        } else {
+            recommendedDate = nil
         }
 
         let explanation: String
-        if isSafe {
-            explanation = "This fits inside your current safe-to-spend amount and leaves \(money(remaining)) of discretionary room."
-        } else {
-            let shortfall = abs(remaining)
-            explanation = "This is \(money(shortfall)) above your current safe-to-spend amount. Waiting protects the money already reserved for your plan."
+        switch status {
+        case .safe:
+            explanation = "This fits inside your current safe-to-spend amount and leaves \(money(max(0, remaining))) of discretionary room without touching your savings goals."
+        case .tradeOff:
+            let delayed = impacts.filter { $0.impactLevel != .unaffected }
+            if let biggest = delayed.max(by: { $0.delayDays < $1.delayDays }) {
+                explanation = "You can make this purchase, but it uses money currently supporting your goals. The biggest projected impact is on \(biggest.goalName)."
+            } else {
+                explanation = "You can make this purchase, but it requires using money currently assigned to savings goals."
+            }
+        case .wait:
+            let uncovered = max(0, shortfall - accessibleGoalFunds)
+            explanation = "This purchase is beyond your current safe-to-spend amount, and even using unprotected goal savings would still leave about \(money(uncovered)) uncovered."
         }
 
         return WhatIfResult(
-            status: isSafe ? .safe : .wait,
+            status: status,
             safeToSpendBeforePurchase: available,
             remainingAfterPurchase: remaining,
-            recommendedDate: recommendation,
+            recommendedDate: recommendedDate,
+            goalImpacts: impacts,
             explanation: explanation
         )
     }
 
-    func analyze(question: String, summary: FinancialSummary, now: Date = Date()) throws -> (WhatIfScenario, WhatIfResult) {
+    func analyze(
+        question: String,
+        summary: FinancialSummary,
+        goals: [FinancialGoal] = [],
+        now: Date = Date()
+    ) throws -> (WhatIfScenario, WhatIfResult) {
         let scenario = try parse(question: question, now: now)
-        return (scenario, evaluate(scenario: scenario, summary: summary))
+        return (scenario, evaluate(scenario: scenario, summary: summary, goals: goals))
+    }
+
+    /// Temporary goal-impact heuristic for the hackathon prototype.
+    /// If a purchase exceeds safe-to-spend, the shortfall is allocated against
+    /// unprotected goals starting with the lowest-priority goal. The delay is
+    /// estimated from each goal's planned monthly contribution.
+    /// Lucas's full engine should replace this heuristic later.
+    private func calculateGoalImpacts(
+        shortfall: Double,
+        goals: [FinancialGoal],
+        calendar: Calendar
+    ) -> [GoalImpact] {
+        guard !goals.isEmpty else { return [] }
+
+        var amountStillNeeded = shortfall
+        var impactsByGoalID: [UUID: GoalImpact] = [:]
+
+        let sacrificeOrder = goals.sorted {
+            if $0.isProtected != $1.isProtected {
+                return !$0.isProtected && $1.isProtected
+            }
+            return $0.priority.rawValue > $1.priority.rawValue
+        }
+
+        for goal in sacrificeOrder {
+            guard amountStillNeeded > 0, !goal.isProtected, goal.currentSaved > 0 else {
+                impactsByGoalID[goal.id] = unaffectedImpact(for: goal)
+                continue
+            }
+
+            let amountPulled = min(goal.currentSaved, amountStillNeeded)
+            amountStillNeeded -= amountPulled
+
+            if goal.plannedMonthlyContribution > 0 {
+                let delayMonths = max(1, Int(ceil(amountPulled / goal.plannedMonthlyContribution)))
+                let projectedDate = calendar.date(byAdding: .month, value: delayMonths, to: goal.targetDate) ?? goal.targetDate
+                let delayDays = max(0, calendar.dateComponents([.day], from: goal.targetDate, to: projectedDate).day ?? 0)
+
+                impactsByGoalID[goal.id] = GoalImpact(
+                    goalID: goal.id,
+                    goalName: goal.name,
+                    impactLevel: .delayed,
+                    originalTargetDate: goal.targetDate,
+                    projectedTargetDate: projectedDate,
+                    delayDays: delayDays,
+                    amountPulledFromGoal: amountPulled,
+                    explanation: "Using \(money(amountPulled)) from this goal is estimated to delay it by about \(delayMonths) month\(delayMonths == 1 ? "" : "s")."
+                )
+            } else {
+                impactsByGoalID[goal.id] = GoalImpact(
+                    goalID: goal.id,
+                    goalName: goal.name,
+                    impactLevel: .atRisk,
+                    originalTargetDate: goal.targetDate,
+                    projectedTargetDate: goal.targetDate,
+                    delayDays: 0,
+                    amountPulledFromGoal: amountPulled,
+                    explanation: "This purchase would use \(money(amountPulled)) from this goal, and there is no contribution pace yet to estimate when it recovers."
+                )
+            }
+        }
+
+        return goals.map { goal in
+            impactsByGoalID[goal.id] ?? unaffectedImpact(for: goal)
+        }
+    }
+
+    private func unaffectedImpact(for goal: FinancialGoal) -> GoalImpact {
+        GoalImpact(
+            goalID: goal.id,
+            goalName: goal.name,
+            impactLevel: .unaffected,
+            originalTargetDate: goal.targetDate,
+            projectedTargetDate: goal.targetDate,
+            delayDays: 0,
+            amountPulledFromGoal: 0,
+            explanation: goal.isProtected
+                ? "This goal is protected and is not used to fund hypothetical purchases."
+                : "This purchase does not currently affect this goal."
+        )
     }
 
     private func extractAmount(from text: String) -> Double? {
