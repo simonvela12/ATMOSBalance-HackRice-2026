@@ -1,48 +1,58 @@
 # How to try the financial engine
 
-You do **not** need to edit `prototype.py` to test the model.
+## Source of truth: Swift
 
-## The only file you normally edit
+From now on, the real engine is:
 
-Open:
+`math/FinancialEngine.swift`
 
-`math/demo_config.json`
+The Python files are only an older reference prototype. Do not build new features in Python.
 
-That file contains the demo inputs: current cash, protected cash, safety buffer, future income, expenses, goals, and the purchase you want to test.
+## Where it runs
 
-## Run it
+The final app is an iPhone app, so the Swift/SwiftUI project is run in **Xcode on a Mac**.
 
-Open a terminal in the `math` folder and run:
+If you are on Windows, you can still edit/review the files in GitHub, but you do not need to install Python and you do not need to set up Swift locally just for the hackathon. Simon can add `FinancialEngine.swift` to the Xcode project and run the app/tests on the Mac.
 
-```bash
-python3 run_demo.py
-```
+## Tests
 
-The program prints the forecast, safe-to-spend amount, and the purchase decision.
+The Swift tests are in:
 
-## Main input fields
+`math/FinancialEngineTests.swift`
 
-- `current_cash`: money available in accounts today
-- `protected_cash`: money that must not be spent
-- `safety_buffer`: extra minimum cash buffer
-- `target_date`: date for the main forecast
-- `income_events`: future income events
-- `expense_events`: future committed expenses
-- `goals`: mandatory or flexible goals
-- `purchase_to_test`: optional purchase to evaluate
+They check the main financial rules, including:
 
-### Income types
+- the reference $8,000 / $7,000 protected scenario
+- irregular income confidence
+- one-time income not being counted twice
+- protected goals not being double-counted
+- unsafe purchases returning WAIT
 
-Use exactly one of:
+## Inputs
 
-- `recurring`
-- `irregular`
-- `oneTime`
+For now, the model receives these Swift values from the app/data layer:
 
-For `irregular`, `confidence` is between `0.0` and `1.0`. Example: an expected $500 irregular payment at 60% confidence contributes $300 to the deterministic forecast.
+- current cash
+- protected cash
+- safety buffer
+- dated income events
+- dated expense events
+- goals
+- purchase amount/date
 
-## Important
+The app UI and Nessie connection will eventually create these values and pass them into `FinancialEngine`.
 
-Dates use `YYYY-MM-DD`, for example `2026-11-30`.
+## Current reference scenario
 
-Do not change `prototype.py` just to try different financial scenarios. Change `demo_config.json`, save it, and run `python3 run_demo.py` again.
+- Current cash: $8,000
+- Protected cash: $7,000
+- Safety buffer: $250
+- Expected future income: $1,000
+- Essential future expenses: $500
+
+Result at the target date:
+
+- Projected balance: $8,500
+- Safe to spend: $1,250
+
+The rules can be changed later without rebuilding the UI because the calculations are isolated inside the engine.
