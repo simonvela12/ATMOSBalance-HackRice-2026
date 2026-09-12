@@ -4,54 +4,169 @@ protocol WhatIfParsing {
     func parseScenario(from text: String) async throws -> WhatIfScenario
 }
 
-/// Temporary local parser used so the What-If flow works before an LLM API is connected.
-/// Replace this with an LLM-backed implementation later without changing the UI.
-struct MockWhatIfParser: WhatIfParsing {
-    func parseScenario(from text: String) async throws -> WhatIfScenario {
-        let amount = extractAmount(from: text) ?? 0
-        let name = extractName(from: text)
-        return WhatIfScenario(type: .purchase, name: name, amount: amount, intendedDate: nil)
-    }
-
-    private func extractAmount(from text: String) -> Double? {
-        let pattern = #"\$?([0-9]+(?:\.[0-9]{1,2})?)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern),
-              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              let range = Range(match.range(at: 1), in: text) else { return nil }
-        return Double(text[range])
-    }
-
-    private func extractName(from text: String) -> String {
-        let cleaned = text
-            .replacingOccurrences(of: "can i buy", with: "", options: .caseInsensitive)
-            .replacingOccurrences(of: "can i afford", with: "", options: .caseInsensitive)
-            .replacingOccurrences(of: "what if i buy", with: "", options: .caseInsensitive)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return cleaned.isEmpty ? "Purchase" : cleaned
+enum WhatIfParserFactory {
+    static func makeDefault() -> any WhatIfParsing {
+        if let key = ProcessInfo.processInfo.environment["GEMINI_API_KEY"], !key.isEmpty {
+            return GeminiWhatIfParser(apiKey: key)
+        }
+        return LocalWhatIfParser()
     }
 }
 
-struct MockWhatIfEvaluator {
-    let safeToSpend: Double
+/// Offline fallback. It keeps the demo usable even if Gemini is not configured or the network is unavailable.
+struct LocalWhatIfParser: WhatIfParsing {
+    private let engine = WhatIfEngine()
 
-    func evaluate(_ scenario: WhatIfScenario) -> WhatIfResult {
-        let remaining = safeToSpend - scenario.amount
-        if remaining >= 0 {
-            return WhatIfResult(
-                status: .safe,
-                safeToSpendBeforePurchase: safeToSpend,
-                remainingAfterPurchase: remaining,
-                recommendedDate: nil,
-                explanation: "This purchase fits inside your current safe-to-spend amount."
-            )
+    func parseScenario(from text: String) async throws -> WhatIfScenario {
+        try engine.parse(question: text)
+    }
+}
+
+/// Lightweight Gemini REST client whose only job is to turn natural language into a structured scenario.
+/// It does NOT decide whether the user can afford the purchase.
+struct GeminiWhatIfParser: WhatIfParsing {
+    enum ServiceError: LocalizedError {
+        case invalidResponse
+        case httpError(Int)
+        case invalidScenario
+
+        var errorDescription: String? {
+            switch self {
+            case .invalidResponse:
+                return "Gemini returned an unreadable response."
+            case .httpError(let code):
+                return "Gemini request failed with HTTP \(code)."
+            case .invalidScenario:
+                return "I couldn't identify a valid purchase amount from that question."
+            }
+        }
+    }
+
+    private let apiKey: String
+    private let session: URLSession
+    private let model = "gemini-3.8-flash"
+
+    init(apiKey: String, session: URLSession = .shared) {
+        self.apiKey = apiKey
+        self.session = session
+    }
+
+    func parseScenario(from text: String) async throws -> WhatIfScenario {
+        let today = Self.dayFormatter.string(from: Date())
+        let prompt = """
+        Today is \(today).
+
+        Extract a single hypothetical purchase from the user's finance question.
+        Do not give financial advice and do not decide whether the purchase is affordable.
+        Your only job is data extraction.
+
+        User question: \(text)
+
+        For intendedDate:
+        - resolve relative dates such as today, next week, next month, or this weekend using today's date;
+        - return an empty string when no date is specified.
+        """
+
+        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent") else {
+            throw ServiceError.invalidResponse
         }
 
-        return WhatIfResult(
-            status: .wait,
-            safeToSpendBeforePurchase: safeToSpend,
-            remainingAfterPurchase: remaining,
-            recommendedDate: nil,
-            explanation: "This purchase is above your current safe-to-spend amount by \(abs(remaining).formatted(.currency(code: \"USD\")))."
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
+        request.httpBody = try JSONSerialization.data(withJSONObject: Self.requestBody(prompt: prompt))
+
+        let (data, response) = try await session.data(for: request)
+
+        guard let http = response as? HTTPURLResponse else {
+            throw ServiceError.invalidResponse
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw ServiceError.httpError(http.statusCode)
+        }
+
+        let envelope = try JSONDecoder().decode(GeminiEnvelope.self, from: data)
+        guard let jsonText = envelope.candidates.first?.content.parts.first?.text,
+              let scenarioData = jsonText.data(using: .utf8) else {
+            throw ServiceError.invalidResponse
+        }
+
+        let payload = try JSONDecoder().decode(ScenarioPayload.self, from: scenarioData)
+        guard payload.amount > 0 else { throw ServiceError.invalidScenario }
+
+        let date: Date?
+        if payload.intendedDate.isEmpty {
+            date = nil
+        } else {
+            date = Self.dayFormatter.date(from: payload.intendedDate)
+        }
+
+        return WhatIfScenario(
+            type: .purchase,
+            name: payload.name.isEmpty ? "Purchase" : payload.name,
+            amount: payload.amount,
+            intendedDate: date
         )
+    }
+
+    private static func requestBody(prompt: String) -> [String: Any] {
+        [
+            "contents": [
+                ["parts": [["text": prompt]]]
+            ],
+            "generationConfig": [
+                "responseMimeType": "application/json",
+                "responseSchema": [
+                    "type": "OBJECT",
+                    "properties": [
+                        "name": ["type": "STRING", "description": "Short name of the item or purchase"],
+                        "amount": ["type": "NUMBER", "description": "Purchase price in USD"],
+                        "intendedDate": ["type": "STRING", "description": "YYYY-MM-DD, or empty string if unspecified"]
+                    ],
+                    "required": ["name", "amount", "intendedDate"]
+                ]
+            ]
+        ]
+    }
+
+    private struct GeminiEnvelope: Decodable {
+        let candidates: [Candidate]
+
+        struct Candidate: Decodable {
+            let content: Content
+        }
+
+        struct Content: Decodable {
+            let parts: [Part]
+        }
+
+        struct Part: Decodable {
+            let text: String
+        }
+    }
+
+    private struct ScenarioPayload: Decodable {
+        let name: String
+        let amount: Double
+        let intendedDate: String
+    }
+
+    private static let dayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+}
+
+struct WhatIfEvaluator {
+    let summary: FinancialSummary
+    private let engine = WhatIfEngine()
+
+    func evaluate(_ scenario: WhatIfScenario) -> WhatIfResult {
+        engine.evaluate(scenario: scenario, summary: summary)
     }
 }
