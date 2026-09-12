@@ -4,9 +4,9 @@ import FinancialCore
 
 /// Shared, UI-free construction of the `FinancialProfile` the engine consumes.
 ///
-/// This was previously private to `ProductRootView`. It lives here so Marc's
-/// forecast UI and the product screens build the same profile from the same
-/// linked-bank data rather than each inventing their own.
+/// Marc's forecast UI, Context and the planning engines all build from this same
+/// linked-bank profile. Confirmed Context decisions are reapplied here so every
+/// product surface reasons over the same user-confirmed facts.
 enum AppFinancialData {
     static var calendar: Calendar {
         var value = Calendar(identifier: .gregorian)
@@ -28,11 +28,9 @@ enum AppFinancialData {
 
     /// Builds the profile the engine reasons over.
     ///
-    /// Everything here comes from somewhere real: past activity from the linked
-    /// bank, future activity and goals from what the user entered. There are no
-    /// sample bills, no placeholder goals and no assumed reserve — an account with
-    /// no user plan simply has none of those, and the forecast reflects that
-    /// honestly rather than inventing a story.
+    /// Past activity and the current balance come from the linked bank. Future
+    /// activity, goals and reserve rules come only from user-entered product data
+    /// or user-confirmed Context. There are no seeded bills, goals or balances.
     static func profile(
         currentCash: Double?,
         transactions: [FinanceCore.FinancialTransaction],
@@ -78,7 +76,7 @@ enum AppFinancialData {
             reserveSteps = []
         }
 
-        return FinancialProfile(
+        let baseProfile = FinancialProfile(
             currentCash: currentCash ?? 0,
             asOfDate: asOf,
             personalReserveSteps: reserveSteps,
@@ -89,6 +87,8 @@ enum AppFinancialData {
             weeklySpendingHistory: history(usable, asOf),
             spendingPolicy: SpendingPolicy(lookbackWeeks: 6, bufferWeeks: 2, manualMinimumBuffer: 0)
         )
+
+        return ContextPersistence.applyConfirmedDecisions(to: baseProfile)
     }
 
     private static func history(
@@ -114,13 +114,9 @@ enum AppFinancialData {
 /// Savings that accrue by spending less than usual.
 ///
 /// The engine already establishes a typical weekly spending rate from real
-/// transaction history. Any week that came in under that rate left money behind,
-/// and that money is what funds goals. Weeks that came in over the rate do not
-/// create a debt — overspending already shows up in the forecast, and charging a
-/// goal for it as well would say the same thing twice.
+/// transaction history. Any completed week that came in under that rate left
+/// money behind. Overspending is not charged twice.
 enum SavingsAccrual {
-
-    /// Total accrued across completed weeks of history.
     static func accrued(
         profile: FinancialProfile,
         calendar: Calendar = AppFinancialData.calendar
@@ -128,7 +124,6 @@ enum SavingsAccrual {
         let typical = FinancialEngine.typicalWeeklySpending(profile: profile, calendar: calendar)
         guard typical > 0 else { return 0 }
 
-        // The week in progress is not a saving yet — its spending has not finished.
         let currentWeekStart = calendar.dateInterval(of: .weekOfYear, for: profile.asOfDate)?.start
 
         return profile.weeklySpendingHistory.reduce(0) { total, week in
@@ -149,8 +144,6 @@ enum SavingsAccrual {
         }
     }
 
-    /// Spreads what was saved across goals, earliest deadline first, never giving
-    /// a goal more than it still needs.
     static func allocate(_ pot: Double, across goals: [GoalNeed]) -> [UUID: Double] {
         var remainingPot = max(0, pot)
         var allocation: [UUID: Double] = [:]
