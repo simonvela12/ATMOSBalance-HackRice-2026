@@ -57,8 +57,6 @@ enum GeminiWhatIfSettings {
             } else {
                 SecItemDelete(identity as CFDictionary)
             }
-            // Never retain a credential or a response generated under a different
-            // credential in UserDefaults.
             UserDefaults.standard.removeObject(forKey: legacyDefaultsKey)
             UserDefaults.standard.removeObject(forKey: "gemini.lastScenario")
             UserDefaults.standard.removeObject(forKey: "gemini.lastAdvice")
@@ -75,7 +73,7 @@ enum GeminiWhatIfError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingKey: return "Add a Gemini API key to use natural-language scenarios."
-        case .invalidKey: return "Gemini rejected that API key."
+        case .invalidKey: return "Gemini rejected that API key. Use a current Google AI Studio Auth key."
         case .rateLimited: return "Gemini is busy right now. Try again shortly."
         case .serviceUnavailable: return "Gemini is temporarily unavailable across its fallback models. Your financial calculation has not been changed; try Analyze again shortly."
         case .invalidScenario: return "Include each amount and when it starts so Gemini can understand the scenario."
@@ -237,12 +235,11 @@ enum GeminiWhatIfService {
             candidateModels.append(candidateModels.removeFirst())
         }
         for (index, model) in candidateModels.enumerated() {
-            var components = URLComponents(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent")
-            components?.queryItems = [URLQueryItem(name: "key", value: key)]
-            guard let url = components?.url else { continue }
+            guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent") else { continue }
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.timeoutInterval = 30
+            request.setValue(key, forHTTPHeaderField: "x-goog-api-key")
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             let payload: [String: Any] = ["contents": [["parts": [["text": prompt]]]], "generationConfig": ["temperature": temperature, "maxOutputTokens": 1024]]
             request.httpBody = try JSONSerialization.data(withJSONObject: payload)
