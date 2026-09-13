@@ -1,10 +1,12 @@
 import Foundation
 import FinancialCore
+import Security
 
 enum GeminiWhatIfSettings {
-    private static let keyName = "gemini.apiKey"
     private static let workingModelKey = "gemini.workingModel"
-    private static let developmentAPIKey = "AQ.Ab8RN6K-285QUngGc_L_IVMeVKUqPHJDWFbcJuSqJ4Id-bfp9g"
+    private static let legacyDefaultsKey = "gemini.apiKey"
+    private static let keychainService = "com.hackathon2026.finanzas.gemini"
+    private static let keychainAccount = "api-key"
     static let models = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-2.0-flash"]
 
     static var orderedModels: [String] {
@@ -18,15 +20,53 @@ enum GeminiWhatIfSettings {
 
     static var apiKey: String? {
         get {
-            let value = UserDefaults.standard.string(forKey: keyName)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return value?.isEmpty == false ? value : developmentAPIKey
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: keychainService,
+                kSecAttrAccount as String: keychainAccount,
+                kSecReturnData as String: true,
+                kSecMatchLimit as String: kSecMatchLimitOne
+            ]
+            var result: CFTypeRef?
+            guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+                  let data = result as? Data,
+                  let value = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !value.isEmpty else {
+                return nil
+            }
+            return value
         }
         set {
             let value = newValue?.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let value, !value.isEmpty { UserDefaults.standard.set(value, forKey: keyName) }
-            else { UserDefaults.standard.removeObject(forKey: keyName) }
+            let identity: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: keychainService,
+                kSecAttrAccount as String: keychainAccount
+            ]
+            if let value, !value.isEmpty, let data = value.data(using: .utf8) {
+                let attributes: [String: Any] = [
+                    kSecValueData as String: data,
+                    kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+                ]
+                let updateStatus = SecItemUpdate(identity as CFDictionary, attributes as CFDictionary)
+                if updateStatus == errSecItemNotFound {
+                    var item = identity
+                    attributes.forEach { item[$0.key] = $0.value }
+                    SecItemAdd(item as CFDictionary, nil)
+                }
+            } else {
+                SecItemDelete(identity as CFDictionary)
+            }
+            // Never retain a credential or a response generated under a different
+            // credential in UserDefaults.
+            UserDefaults.standard.removeObject(forKey: legacyDefaultsKey)
+            UserDefaults.standard.removeObject(forKey: "gemini.lastScenario")
+            UserDefaults.standard.removeObject(forKey: "gemini.lastAdvice")
+            UserDefaults.standard.removeObject(forKey: workingModelKey)
         }
     }
+
+    static var hasAPIKey: Bool { apiKey != nil }
 }
 
 enum GeminiWhatIfError: LocalizedError {

@@ -2189,6 +2189,10 @@ private struct WhatIfSheet: View {
     @State private var aiUsedLiveSearch = true
     @State private var aiError: String?
     @State private var isAnalyzing = false
+    @State private var geminiAPIKey = ""
+    @State private var showsGeminiAPIKey = false
+    @State private var hasGeminiAPIKey = GeminiWhatIfSettings.hasAPIKey
+    @State private var geminiKeyStatus: String?
     @FocusState private var focusedField: WhatIfFocusedField?
 
     private var amount: Double { amountText.moneyValue ?? 0 }
@@ -2281,10 +2285,73 @@ private struct WhatIfSheet: View {
                                 .foregroundStyle(.white.opacity(0.58))
                         }
                         EntryCard(title: "GEMINI CONNECTION") {
-                            Label("Gemini connected for this development build", systemImage: "checkmark.circle.fill")
+                            Label(
+                                hasGeminiAPIKey ? "Gemini API key saved on this iPhone" : "Add your Gemini API key",
+                                systemImage: hasGeminiAPIKey ? "checkmark.shield.fill" : "key.fill"
+                            )
                                 .font(.helvetica(.subheadline, weight: .semibold))
-                                .foregroundStyle(Color.rainMist)
-                            Text("Gemini interprets and explains. The app's deterministic engine still makes every financial calculation.")
+                                .foregroundStyle(hasGeminiAPIKey ? Color.rainMist : Color.sunGold)
+
+                            HStack(spacing: 8) {
+                                Group {
+                                    if showsGeminiAPIKey {
+                                        TextField("Paste Gemini API key", text: $geminiAPIKey)
+                                    } else {
+                                        SecureField("Paste Gemini API key", text: $geminiAPIKey)
+                                    }
+                                }
+                                .focused($focusedField, equals: .apiKey)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .font(.helvetica(.body))
+
+                                Button {
+                                    showsGeminiAPIKey.toggle()
+                                } label: {
+                                    Image(systemName: showsGeminiAPIKey ? "eye.slash" : "eye")
+                                        .frame(width: 44, height: 44)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel(showsGeminiAPIKey ? "Hide API key" : "Show API key")
+                            }
+                            .padding(.leading, 12)
+                            .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+
+                            HStack(spacing: 10) {
+                                Button {
+                                    saveGeminiAPIKey()
+                                } label: {
+                                    Label(hasGeminiAPIKey ? "Replace key" : "Save key", systemImage: "key.horizontal.fill")
+                                        .font(.helvetica(.subheadline, weight: .bold))
+                                        .frame(maxWidth: .infinity, minHeight: 46)
+                                        .contentShape(Rectangle())
+                                        .background(.white.opacity(geminiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.08 : 0.16), in: RoundedRectangle(cornerRadius: 10))
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(geminiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                                if hasGeminiAPIKey {
+                                    Button {
+                                        removeGeminiAPIKey()
+                                    } label: {
+                                        Image(systemName: "trash")
+                                            .frame(width: 46, height: 46)
+                                            .contentShape(Rectangle())
+                                            .background(.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel("Remove Gemini API key")
+                                }
+                            }
+
+                            if let geminiKeyStatus {
+                                Text(geminiKeyStatus)
+                                    .font(.helvetica(.caption, weight: .semibold))
+                                    .foregroundStyle(hasGeminiAPIKey ? Color.rainMist : Color.sunGold)
+                            }
+
+                            Text("Stored only in this iPhone's Keychain. Gemini interprets and explains; the deterministic engine still makes every financial calculation.")
                                 .font(.helvetica(.caption))
                                 .foregroundStyle(.white.opacity(0.58))
                             Button {
@@ -2297,10 +2364,10 @@ private struct WhatIfSheet: View {
                                 }
                                 .frame(maxWidth: .infinity, minHeight: 52)
                                 .contentShape(Rectangle())
-                                .background(.white.opacity(scenarioText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.10 : 0.22), in: RoundedRectangle(cornerRadius: 11))
+                                .background(.white.opacity(!hasGeminiAPIKey || scenarioText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.10 : 0.22), in: RoundedRectangle(cornerRadius: 11))
                             }
                             .buttonStyle(.plain)
-                            .disabled(isAnalyzing || scenarioText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            .disabled(isAnalyzing || !hasGeminiAPIKey || scenarioText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                             if let aiError { Text(aiError).font(.helvetica(.caption, weight: .semibold)).foregroundStyle(Color.sunGold) }
                         }
 
@@ -2416,6 +2483,7 @@ private struct WhatIfSheet: View {
             }
         }
         .onChange(of: inputMode) { _, _ in focusedField = nil }
+        .onAppear { hasGeminiAPIKey = GeminiWhatIfSettings.hasAPIKey }
         .task(id: quickAnalysisKey) {
             guard inputMode == .quick else { return }
             guard let scenario = manualScenario else {
@@ -2478,6 +2546,30 @@ private struct WhatIfSheet: View {
         }
     }
 
+    private func saveGeminiAPIKey() {
+        let cleaned = geminiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return }
+        GeminiWhatIfSettings.apiKey = cleaned
+        hasGeminiAPIKey = GeminiWhatIfSettings.hasAPIKey
+        geminiKeyStatus = hasGeminiAPIKey
+            ? "API key saved securely."
+            : "The API key could not be saved. Please try again."
+        if hasGeminiAPIKey { geminiAPIKey = "" }
+        focusedField = nil
+    }
+
+    private func removeGeminiAPIKey() {
+        GeminiWhatIfSettings.apiKey = nil
+        hasGeminiAPIKey = false
+        geminiAPIKey = ""
+        geminiKeyStatus = "API key removed from this iPhone."
+        interpretedScenario = nil
+        aiAnalysis = nil
+        aiExplanation = ""
+        aiError = nil
+        focusedField = nil
+    }
+
     private func retryGeminiExplanation() {
         guard let result = aiAnalysis else { return }
         isAnalyzing = true
@@ -2525,7 +2617,7 @@ private struct WhatIfSheet: View {
 }
 
 private enum WhatIfInputMode: Hashable { case quick, gemini }
-private enum WhatIfFocusedField: Hashable { case quickAmount, scenario }
+private enum WhatIfFocusedField: Hashable { case quickAmount, scenario, apiKey }
 
 private extension FinancialHealthStatus {
     var displayText: String { rawValue.replacingOccurrences(of: "_", with: " ").capitalized }

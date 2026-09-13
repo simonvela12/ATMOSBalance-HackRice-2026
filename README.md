@@ -40,7 +40,7 @@ Atmos is an iOS financial intelligence app built for HackRice 16. Instead of onl
 3. Select the `Finanzas2026` scheme and an iPhone simulator.
 4. Build and run the project.
 5. To connect Nessie data, open the account connection flow inside the app and enter a valid Nessie API key and customer ID.
-6. For Gemini-powered What If scenarios, add `GEMINI_API_KEY` to the Xcode scheme's **Run > Arguments > Environment Variables** section before launching the app.
+6. For Gemini-powered What If scenarios, open **What If → Ask Gemini** and paste your own Gemini API key. The key is stored only in the device Keychain and is never added to the project files.
 
 The project also contains mock/demo data, so the interface and core financial logic can be explored without connecting a real bank account.
 
