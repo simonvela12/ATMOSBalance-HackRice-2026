@@ -54,14 +54,17 @@ public enum FinancialScenarioEngine {
                 confidence: event.confidence
             )
 
+            // The nominal amount stays intact — it is still what the payment is worth —
+            // and the scenario's discount is carried as the weight the plan applies to
+            // it. Folding it into the amount instead would hide the payment's real size.
             return IncomeEvent(
                 id: event.id,
-                amount: event.scenarioNominalAmount(for: scenario) * weight,
+                amount: event.scenarioNominalAmount(for: scenario),
                 date: event.scenarioDate(for: scenario),
                 source: event.source,
                 type: event.type,
-                confidence: 1,
-                reliability: .reliable,
+                confidence: weight,
+                reliability: .uncertain,
                 recurrenceRule: event.recurrenceRule,
                 allocations: event.allocations,
                 planningSource: event.planningSource,
