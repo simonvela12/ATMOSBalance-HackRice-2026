@@ -311,6 +311,12 @@ public struct Goal: Codable, Identifiable, Sendable {
     public let id: UUID
     public let name: String
     public let targetAmount: Double
+    /// Money that has **already left the balance** — a deposit paid, a booking settled.
+    ///
+    /// This is not "progress towards the goal". Money the user has mentally set aside
+    /// but that is still sitting in their account has not been paid: it is still in
+    /// `currentCash`, and the goal still costs its full price on its date. Subtracting
+    /// it here as well would let the plan spend the same money twice.
     public let amountAlreadyPaid: Double
     public let deadline: Date
     public let priority: GoalPriority

@@ -141,33 +141,15 @@ private struct ProtectedFundsBanner: View {
         }
 
         let plan = ProtectedPlanSnapshot.load()
-        let base = AppFinancialData.profile(
-            currentCash: bankStore.totalAvailableCash,
-            transactions: bankStore.transactions
-        )
-        let savingsPot = SavingsAccrual.accrued(profile: base)
-        let allocation = SavingsAccrual.allocate(
-            savingsPot,
-            across: plan.goals.map { goal in
-                SavingsAccrual.GoalNeed(
-                    id: goal.id,
-                    remaining: max(0, Double(goal.targetAmount - goal.saved)),
-                    deadline: goal.targetDate,
-                    priority: goal.mustHappen ? .mandatory : goal.effectivePriority,
-                    flexibility: goal.effectiveFlexibility
-                )
-            }
-        )
-
         let engineGoals = plan.goals.map { goal in
             FinancialCore.Goal(
                 id: goal.id,
                 name: goal.name,
                 targetAmount: Double(goal.targetAmount),
-                amountAlreadyPaid: min(
-                    Double(goal.targetAmount),
-                    Double(goal.saved) + (allocation[goal.id] ?? 0)
-                ),
+                // Savings the user has set aside are still in this balance, so the goal
+                // still has to be paid in full on its date. Counting them as paid here
+                // would let the plan spend the same money twice.
+                amountAlreadyPaid: 0,
                 deadline: goal.targetDate,
                 priority: goal.mustHappen ? .mandatory : goal.effectivePriority,
                 flexibility: goal.effectiveFlexibility,

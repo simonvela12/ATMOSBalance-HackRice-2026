@@ -387,6 +387,51 @@ final class SafeToSpendEngineTests: XCTestCase {
         )
     }
 
+    func testAmountAlreadyPaidMeansMoneyThatLeftTheBalance() throws {
+        // One real situation, described two ways. A $600 goal where $200 has genuinely
+        // been paid: the balance is down to $800 and $400 is left to find.
+        let partlyPaid = try SafeToSpendEngine.evaluate(
+            profile: profile(
+                cash: 800,
+                goals: [
+                    Goal(
+                        name: "Miami",
+                        targetAmount: 600,
+                        amountAlreadyPaid: 200,
+                        deadline: day(40),
+                        priority: .mandatory,
+                        flexibility: .fixed
+                    )
+                ]
+            ),
+            calendar: calendar
+        )
+
+        // The same goal before anything is paid: the $200 is still in the balance and
+        // the trip still costs $600.
+        let nothingPaid = try SafeToSpendEngine.evaluate(
+            profile: profile(
+                cash: 1000,
+                goals: [
+                    Goal(
+                        name: "Miami",
+                        targetAmount: 600,
+                        deadline: day(40),
+                        priority: .mandatory,
+                        flexibility: .fixed
+                    )
+                ]
+            ),
+            calendar: calendar
+        )
+
+        // Both descriptions have to produce the same answer. Treating savings that are
+        // still in the account as "already paid" would report $600 here and let the
+        // user spend the same $200 twice.
+        XCTAssertEqual(partlyPaid.amount, 400, accuracy: 0.001)
+        XCTAssertEqual(nothingPaid.amount, 400, accuracy: 0.001)
+    }
+
     func testGoalDeadlineIsNamedAsTheLimitingConstraint() throws {
         let miami = Goal(
             name: "Miami",

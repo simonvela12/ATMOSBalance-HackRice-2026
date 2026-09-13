@@ -64,6 +64,29 @@ struct PurchaseVerdict {
     let recommendedDate: Date?
     let worsenedGoals: [GoalChange]
 
+    /// Everything below comes straight from the engine's structured result. The model
+    /// is never given room to work out affordability for itself.
+    struct GoalMove {
+        let name: String
+        let from: Date
+        let to: Date
+    }
+
+    struct ScenarioOutcome {
+        let name: String
+        let summary: String
+    }
+
+    let recommendation: PurchaseRecommendation
+    let safeToSpendBefore: Double
+    let safeToSpendAfter: Double
+    let runwayRequestedDate: Date?
+    let runwayEndsBefore: Date?
+    let runwayStillHolds: Bool
+    let movedGoals: [GoalMove]
+    let scenarios: [ScenarioOutcome]
+    let uncertainIncome: (source: String, amount: Double, date: Date)?
+
     private static let money = FloatingPointFormatStyle<Double>.Currency(code: "USD")
         .precision(.fractionLength(0))
 
@@ -111,6 +134,34 @@ struct PurchaseVerdict {
                 lines.append("Goal '\(goal.name)' moves from \(goal.before) to \(goal.after).")
             }
         }
+
+        lines.append("Recommendation: \(recommendation.rawValue)")
+        lines.append(
+            "Safe to spend today falls from \(Self.money.format(safeToSpendBefore)) to \(Self.money.format(safeToSpendAfter))."
+        )
+
+        if let runwayRequestedDate {
+            if runwayStillHolds {
+                lines.append("The user asked their money to last until \(Self.date(runwayRequestedDate)), and it still does.")
+            } else if let runwayEndsBefore {
+                lines.append("The user asked their money to last until \(Self.date(runwayRequestedDate)), but with this purchase it runs out on \(Self.date(runwayEndsBefore)).")
+            }
+        }
+
+        for goal in movedGoals {
+            lines.append("Goal '\(goal.name)' moves from \(Self.date(goal.from)) to \(Self.date(goal.to)).")
+        }
+
+        for scenario in scenarios {
+            lines.append("Under the \(scenario.name) assumptions: \(scenario.summary).")
+        }
+
+        if let uncertainIncome {
+            lines.append(
+                "This only works if \(Self.money.format(uncertainIncome.amount)) from '\(uncertainIncome.source)' arrives on \(Self.date(uncertainIncome.date)); that money is not guaranteed."
+            )
+        }
+
         return lines.joined(separator: "\n")
     }
 }

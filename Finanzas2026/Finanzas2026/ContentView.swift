@@ -72,14 +72,18 @@ struct ContentView: View {
     /// The user's goals in the engine's vocabulary. Must-happen goals are
     /// subtracted from the projected path; nice-to-have goals stay out of the
     /// baseline and appear as trade-offs instead.
-    private func engineGoals(allocation: [UUID: Double]) -> [FinancialCore.Goal] {
+    private func engineGoals() -> [FinancialCore.Goal] {
         goals.map { goal in
-            let accrued = allocation[goal.id] ?? 0
-            return FinancialCore.Goal(
+            FinancialCore.Goal(
                 id: goal.id,
                 name: goal.name,
                 targetAmount: Double(goal.targetAmount),
-                amountAlreadyPaid: min(Double(goal.targetAmount), Double(goal.saved) + accrued),
+                // What the user has "saved" is still in their bank balance, so the goal
+                // still costs its full price on its date. Only money that has genuinely
+                // left the account counts as paid, and this app has no way to record
+                // that yet. Treating savings as paid would spend it twice: once as
+                // available cash, once as a goal already covered.
+                amountAlreadyPaid: 0,
                 deadline: goal.targetDate,
                 priority: goal.mustHappen ? .mandatory : goal.priority,
                 flexibility: goal.flexibility,
@@ -126,9 +130,10 @@ struct ContentView: View {
         let horizon = AppFinancialData.horizon(from: asOf)
         let planned = plannedEvents(asOf: asOf, horizon: horizon)
 
-        // Savings accrue from spending history alone, so this base profile carries
-        // no goals — that avoids goals depending on an allocation that depends on
-        // goals.
+        // Accrued savings are a progress figure for the goal tiles, nothing more. The
+        // money is still in the balance, so it never reduces what a goal costs on its
+        // date. This base profile carries no goals because the accrual is derived from
+        // spending history alone.
         let base = AppFinancialData.profile(
             currentCash: bankStore.totalAvailableCash,
             transactions: bankStore.transactions
@@ -152,7 +157,7 @@ struct ContentView: View {
         let profile = AppFinancialData.profile(
             currentCash: bankStore.totalAvailableCash,
             transactions: bankStore.transactions,
-            goals: engineGoals(allocation: allocation),
+            goals: engineGoals(),
             plannedIncome: planned.income,
             plannedExpenses: planned.expenses,
             minimumCashReserve: minimumCashReserve,
@@ -1785,6 +1790,24 @@ private struct WhatIfSheet: View {
                     before: $0.before.status.rawValue,
                     after: $0.after.status.rawValue
                 )
+            },
+            recommendation: analysis.recommendation,
+            safeToSpendBefore: analysis.safeToSpendBefore.primary.amount,
+            safeToSpendAfter: analysis.safeToSpendAfter.primary.amount,
+            runwayRequestedDate: analysis.runwayAfter.requestedDate,
+            runwayEndsBefore: analysis.runwayAfter.projectedDepletionDate,
+            runwayStillHolds: analysis.runwayAfter.isSatisfied,
+            movedGoals: analysis.movedGoals.map {
+                PurchaseVerdict.GoalMove(name: $0.name, from: $0.dateBefore, to: $0.dateAfter)
+            },
+            scenarios: analysis.scenarioOutcomes.map {
+                PurchaseVerdict.ScenarioOutcome(
+                    name: $0.scenario.title.lowercased(),
+                    summary: $0.outcomeTitle.lowercased()
+                )
+            },
+            uncertainIncome: analysis.dependsOnUncertainIncome.first.map {
+                (source: $0.source, amount: $0.amount, date: $0.date)
             }
         )
     }
