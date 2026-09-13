@@ -243,7 +243,7 @@ struct ContentView: View {
                 payments: upcomingPaymentActivities,
                 planning: goalPlanning
             )
-                .presentationDetents([.medium, .large])
+                .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
         .sheet(item: $goalBeingAllocated) { goal in
@@ -309,27 +309,6 @@ struct ContentView: View {
 
     private var topBar: some View {
         HStack(spacing: 12) {
-            ZStack {
-                Circle()
-                    .fill(.white.opacity(0.14))
-                Image(systemName: "cloud.sun.fill")
-                    .font(.system(size: 18, weight: .semibold))
-                    .symbolRenderingMode(.palette)
-                    .foregroundStyle(.white.opacity(0.9), Color.sunGold)
-            }
-            .frame(width: 42, height: 42)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text("FINANZAS")
-                    .font(.helvetica(.caption, weight: .heavy))
-                    .tracking(1.6)
-                Text("Financial weather")
-                    .font(.helvetica(.caption2))
-                    .foregroundStyle(.white.opacity(0.62))
-            }
-
-            Spacer()
-
             Button { showingFinancialSettings = true } label: {
                 Image(systemName: "gearshape.fill")
                     .font(.system(size: 16, weight: .semibold))
@@ -337,6 +316,8 @@ struct ContentView: View {
                     .background(.white.opacity(0.12), in: Circle())
             }
             .accessibilityLabel("Financial settings")
+
+            Spacer()
 
             Button {
                 showingBankConnection = true
@@ -350,7 +331,7 @@ struct ContentView: View {
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 20)
-        .padding(.top, 10)
+        .padding(.top, 2)
     }
 
     private var hero: some View {
@@ -432,7 +413,7 @@ struct ContentView: View {
         }
         .foregroundStyle(.white)
         .frame(maxWidth: .infinity)
-        .padding(.top, 24)
+        .padding(.top, 8)
         .padding(.bottom, 26)
         .accessibilityElement(children: .combine)
     }
@@ -692,13 +673,7 @@ struct ContentView: View {
         Button {
             showingWhatIf = true
         } label: {
-            HStack(spacing: 13) {
-                Image(systemName: "wand.and.stars")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Color.sunGold)
-                    .frame(width: 38, height: 38)
-                    .background(.white.opacity(0.1), in: Circle())
-
+            HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("What if?")
                         .font(.helvetica(.headline))
@@ -714,21 +689,26 @@ struct ContentView: View {
                     .foregroundStyle(.white.opacity(0.55))
             }
             .foregroundStyle(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.top, 12)
-                    .padding(.bottom, 20)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .background(.black.opacity(0.22), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(.white.opacity(0.18), lineWidth: 0.75)
+            .padding(.horizontal, 20)
+            .padding(.top, 13)
+            .padding(.bottom, 12)
+            .background {
+                ZStack {
+                    Rectangle().fill(.ultraThinMaterial)
+                    LinearGradient(
+                        colors: [presentationWeather.primaryColor.opacity(0.16), Color.deepNavy.opacity(0.48)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                }
+                .ignoresSafeArea(edges: .bottom)
             }
-            .shadow(color: .black.opacity(0.2), radius: 16, y: 8)
+            .overlay(alignment: .top) {
+                Rectangle().fill(.white.opacity(0.16)).frame(height: 0.75)
+            }
+            .shadow(color: .black.opacity(0.18), radius: 12, y: -4)
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
-        .padding(.bottom, 6)
     }
 
     private func renameEntry(_ target: ForecastEntryTarget, name: String, scope: OccurrenceScope) {
@@ -906,6 +886,8 @@ private struct BalanceChartCard: View {
                         .foregroundStyle(.white.opacity(0.62))
                     Text("Where your balance is heading")
                         .font(.helvetica(.title3, weight: .semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.82)
                 }
 
                 Spacer()
@@ -1356,12 +1338,12 @@ private struct WeeklyGoalFundingStatus: View {
         HStack(spacing: 6) {
             Image(systemName: isComplete ? "checkmark.circle.fill" : "circle")
                 .foregroundStyle(isComplete ? Color.rainMist : .white.opacity(0.55))
-            Text(isComplete ? "This week funded" : "Allocate (remaining.currencyText) this week")
+            Text(isComplete ? "This week funded" : "Allocate \(remaining.currencyText) this week")
                 .foregroundStyle(isComplete ? Color.rainMist : .white.opacity(0.68))
             Spacer(minLength: 0)
         }
         .font(.helvetica(.caption2, weight: .semibold))
-        .accessibilityLabel(isComplete ? "Weekly goal funding complete" : "(remaining.currencyText) remains to allocate this week")
+        .accessibilityLabel(isComplete ? "Weekly goal funding complete" : "\(remaining.currencyText) remains to allocate this week")
     }
 }
 
@@ -2431,6 +2413,7 @@ private struct CalendarForecastSheet: View {
                         .foregroundStyle(.white.opacity(0.52))
                 }
                 .padding(.horizontal, 16)
+                .padding(.top, 12)
                 .padding(.bottom, 28)
             }
         }
@@ -4100,7 +4083,7 @@ private enum MockForecast {
         let currentBalance = adjustedBasePoints
             .filter { $0.date <= todayDate }
             .last?.balance ?? bank.currentBalance
-        let slope = linearDailyTrend(points: adjustedBasePoints.filter { $0.date <= todayDate })
+        let slope = robustDailyTrend(points: adjustedBasePoints.filter { $0.date <= todayDate })
         let futureOccurrences = occurrences.filter { $0.date > todayDate }
         let futureDeletions = deletedAdjustments.filter { $0.date > todayDate }
 
@@ -4115,6 +4098,11 @@ private enum MockForecast {
 
         let expectedPoints = forecastDates.sorted().map { date -> BalancePoint in
             let days = max(0, date.timeIntervalSince(todayDate) / 86_400)
+            // A damped trend reflects recent direction without assuming that an
+            // irregular student cash-flow pattern continues forever. It approaches
+            // a plateau while explicit scheduled activity remains fully represented.
+            let dampingWindow = 45.0
+            let dampedTrendMovement = slope * dampingWindow * (1 - exp(-days / dampingWindow))
             let plannedMovement = futureOccurrences
                 .filter { $0.date <= date }
                 .reduce(0) { $0 + $1.entry.signedAmount }
@@ -4124,7 +4112,7 @@ private enum MockForecast {
             return BalancePoint(
                 id: "trend-\(Int(date.timeIntervalSince1970))",
                 date: date,
-                balance: currentBalance + slope * days + plannedMovement + restoredMovement,
+                balance: currentBalance + dampedTrendMovement + plannedMovement + restoredMovement,
                 series: .expected,
                 isAnchor: Calendar.current.isDate(date, inSameDayAs: todayDate) || futureOccurrences.contains { Calendar.current.isDate($0.date, inSameDayAs: date) }
             )
@@ -4136,15 +4124,29 @@ private enum MockForecast {
         }
     }
 
-    private static func linearDailyTrend(points: [BalancePoint]) -> Double {
-        guard points.count >= 2,
-              let origin = points.map(\.date).min() else { return 0 }
-        let samples = points.map { (x: $0.date.timeIntervalSince(origin) / 86_400, y: $0.balance) }
-        let meanX = samples.reduce(0) { $0 + $1.x } / Double(samples.count)
-        let meanY = samples.reduce(0) { $0 + $1.y } / Double(samples.count)
-        let denominator = samples.reduce(0) { $0 + pow($1.x - meanX, 2) }
-        guard denominator > 0.000_001 else { return 0 }
-        return samples.reduce(0) { $0 + ($1.x - meanX) * ($1.y - meanY) } / denominator
+    /// Theil-Sen-style slope estimate. The median of pairwise slopes is much less
+    /// sensitive to one-off tuition, rent, or paycheck jumps than least squares.
+    /// Sparse histories are shrunk toward flat because they provide weak evidence
+    /// for a durable trend.
+    private static func robustDailyTrend(points: [BalancePoint]) -> Double {
+        let ordered = points.sorted { $0.date < $1.date }
+        guard ordered.count >= 3 else { return 0 }
+        var slopes: [Double] = []
+        for earlierIndex in 0..<(ordered.count - 1) {
+            for laterIndex in (earlierIndex + 1)..<ordered.count {
+                let days = ordered[laterIndex].date.timeIntervalSince(ordered[earlierIndex].date) / 86_400
+                guard days >= 3 else { continue }
+                slopes.append((ordered[laterIndex].balance - ordered[earlierIndex].balance) / days)
+            }
+        }
+        guard !slopes.isEmpty else { return 0 }
+        let sorted = slopes.sorted()
+        let middle = sorted.count / 2
+        let median = sorted.count.isMultiple(of: 2)
+            ? (sorted[middle - 1] + sorted[middle]) / 2
+            : sorted[middle]
+        let evidenceWeight = min(1, Double(ordered.count - 2) / 8)
+        return median * evidenceWeight
     }
 
     static func data(
