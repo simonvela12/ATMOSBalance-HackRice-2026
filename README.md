@@ -1,7 +1,7 @@
 # AtmosBalance
 
 <p align="center">
-  <img src="docs/atmos-balance-logo.jpg" width="280" alt="AtmosBalance logo">
+  <img src="docs/atmos-balance-logo.svg" width="280" alt="Atmos Balance logo">
 </p>
 
 **Know what you can spend — before you spend it.**
@@ -75,4 +75,9 @@ API credentials are intentionally not required to be committed to the repository
 
 ## Team
 
-Built during HackRice 16 by the AtmosBalance team.
+Built during HackRice 16 by:
+
+- Simon Velandia
+- Carlos Gonzalez
+- Lucas Chini Ferrari
+- Marc Alcolea
