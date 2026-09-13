@@ -215,4 +215,3 @@ public enum FinancialInsights {
         )
     }
 }
-

@@ -85,15 +85,35 @@ private struct GeminiGeneratedResponse {
     let sources: [GeminiAdviceSource]
 }
 
+private struct GeminiScenarioCache: Codable {
+    let input: String
+    let asOfDay: String
+    let horizonDay: String
+    let scenario: WhatIfScenario
+}
+
+private struct GeminiAdviceCache: Codable {
+    let prompt: String
+    let response: String
+}
+
 enum GeminiWhatIfService {
     static func interpret(_ text: String, asOfDate: Date, horizon: Date, calendar: Calendar = .current) async throws -> WhatIfScenario {
         let formatter = dayFormatter(calendar)
+        let normalizedInput = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let data = UserDefaults.standard.data(forKey: "gemini.lastScenario"),
+           let cached = try? JSONDecoder().decode(GeminiScenarioCache.self, from: data),
+           cached.input == normalizedInput,
+           cached.asOfDay == formatter.string(from: asOfDate),
+           cached.horizonDay == formatter.string(from: horizon) {
+            return cached.scenario
+        }
         let prompt = """
         Convert the user's hypothetical financial plan into structured JSON. You only interpret intent: do not judge affordability or calculate any financial result.
         Today is \(formatter.string(from: asOfDate)); the analysis horizon is \(formatter.string(from: horizon)).
         Return JSON only: {"title":"short title","changes":[{"direction":"expense|income","amount":100.00,"startDate":"YYYY-MM-DD","label":"short label","essential":false,"confidence":1.0,"recurrence":null OR {"every":1,"unit":"day|week|month|year","endDate":null,"maxOccurrences":null}}]}.
         Split compound plans into separate changes. Keep recurring items recurring; never multiply them into a lump sum. Use today when no start date is given. For a named month without a day use its first day. Only explicitly uncertain income may have confidence below 1. Never invent an amount; if one is missing, return an empty changes array.
-        USER PLAN: \(text)
+        USER PLAN: \(normalizedInput)
         """
         let raw = try await generate(prompt, temperature: 0).text
         let cleaned = raw.replacingOccurrences(of: "```json", with: "").replacingOccurrences(of: "```", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -110,7 +130,17 @@ enum GeminiWhatIfService {
             } else { recurrence = nil }
             return WhatIfCashFlowChange(direction: direction, amount: item.amount, startDate: calendar.startOfDay(for: start), recurrence: recurrence, label: item.label.isEmpty ? "What-if change" : item.label, essential: item.essential ?? false, confidence: item.confidence ?? 1)
         }
-        return WhatIfScenario(title: envelope.title.isEmpty ? "What-if scenario" : envelope.title, sourceText: text, changes: changes)
+        let scenario = WhatIfScenario(title: envelope.title.isEmpty ? "What-if scenario" : envelope.title, sourceText: normalizedInput, changes: changes)
+        let cached = GeminiScenarioCache(
+            input: normalizedInput,
+            asOfDay: formatter.string(from: asOfDate),
+            horizonDay: formatter.string(from: horizon),
+            scenario: scenario
+        )
+        if let data = try? JSONEncoder().encode(cached) {
+            UserDefaults.standard.set(data, forKey: "gemini.lastScenario")
+        }
+        return scenario
     }
 
     static func explain(_ analysis: WhatIfScenarioAnalysis) async throws -> GeminiWhatIfAdvice {
@@ -137,7 +167,15 @@ enum GeminiWhatIfService {
         FACTS:
         \(facts.joined(separator: "\n"))
         """
-        let response = try await generate(prompt, temperature: 0.2)
+        if let data = UserDefaults.standard.data(forKey: "gemini.lastAdvice"),
+           let cached = try? JSONDecoder().decode(GeminiAdviceCache.self, from: data),
+           cached.prompt == prompt {
+            return GeminiWhatIfAdvice(text: cached.response, sources: [], usedLiveSearch: false)
+        }
+        let response = try await generate(prompt, temperature: 0.2, preferAlternateModel: true)
+        if let data = try? JSONEncoder().encode(GeminiAdviceCache(prompt: prompt, response: response.text)) {
+            UserDefaults.standard.set(data, forKey: "gemini.lastAdvice")
+        }
         return GeminiWhatIfAdvice(text: response.text, sources: [], usedLiveSearch: false)
     }
 
@@ -150,19 +188,23 @@ enum GeminiWhatIfService {
         return formatter
     }
 
-    private static func generate(_ prompt: String, temperature: Double) async throws -> GeminiGeneratedResponse {
+    private static func generate(_ prompt: String, temperature: Double, preferAlternateModel: Bool = false) async throws -> GeminiGeneratedResponse {
         guard let key = GeminiWhatIfSettings.apiKey else { throw GeminiWhatIfError.missingKey }
         var onlyUnavailableResponses = true
-        let candidateModels = GeminiWhatIfSettings.orderedModels
+        var sawRateLimit = false
+        var candidateModels = GeminiWhatIfSettings.orderedModels
+        if preferAlternateModel, candidateModels.count > 1 {
+            candidateModels.append(candidateModels.removeFirst())
+        }
         for (index, model) in candidateModels.enumerated() {
             var components = URLComponents(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent")
             components?.queryItems = [URLQueryItem(name: "key", value: key)]
             guard let url = components?.url else { continue }
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
-            request.timeoutInterval = 75
+            request.timeoutInterval = 30
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            var payload: [String: Any] = ["contents": [["parts": [["text": prompt]]]], "generationConfig": ["temperature": temperature, "maxOutputTokens": 2048]]
+            let payload: [String: Any] = ["contents": [["parts": [["text": prompt]]]], "generationConfig": ["temperature": temperature, "maxOutputTokens": 1024]]
             request.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
             for attempt in 0..<3 {
@@ -171,27 +213,33 @@ enum GeminiWhatIfService {
                 do {
                     (data, response) = try await URLSession.shared.data(for: request)
                 } catch let error as URLError where error.code == .timedOut {
-                    if attempt == 0 { continue }
+                    if attempt < 2 {
+                        try? await Task.sleep(for: .seconds(pow(2, Double(attempt)) + Double.random(in: 0...0.35)))
+                        continue
+                    }
                     break
                 } catch {
                     throw GeminiWhatIfError.network(error.localizedDescription)
                 }
                 guard let http = response as? HTTPURLResponse else { throw GeminiWhatIfError.network("Gemini returned an invalid response.") }
                 if http.statusCode == 404 { break }
-                if http.statusCode == 503 {
-                    if attempt == 0 { try? await Task.sleep(for: .milliseconds(700)) }
+                if http.statusCode == 408 || http.statusCode == 500 || http.statusCode == 502 || http.statusCode == 503 || http.statusCode == 504 {
+                    if attempt < 2 {
+                        try? await Task.sleep(for: .seconds(pow(2, Double(attempt)) + Double.random(in: 0...0.35)))
+                    }
                     continue
                 }
                 onlyUnavailableResponses = false
                 if http.statusCode == 401 || http.statusCode == 403 { throw GeminiWhatIfError.invalidKey }
                 if http.statusCode == 429 {
+                    sawRateLimit = true
                     if attempt < 2 {
-                        let defaultWait = attempt == 0 ? 15.0 : 30.0
-                        let retrySeconds = min(60, max(2, http.value(forHTTPHeaderField: "Retry-After").flatMap(Double.init) ?? defaultWait))
+                        let defaultWait = pow(2, Double(attempt))
+                        let retrySeconds = min(6, max(1, http.value(forHTTPHeaderField: "Retry-After").flatMap(Double.init) ?? defaultWait)) + Double.random(in: 0...0.35)
                         try? await Task.sleep(for: .seconds(retrySeconds))
                         continue
                     }
-                    throw GeminiWhatIfError.rateLimited
+                    break
                 }
                 guard (200..<300).contains(http.statusCode) else { throw GeminiWhatIfError.server(http.statusCode) }
                 let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
@@ -214,6 +262,7 @@ enum GeminiWhatIfService {
             }
             if index < candidateModels.count - 1 { continue }
         }
+        if sawRateLimit { throw GeminiWhatIfError.rateLimited }
         if onlyUnavailableResponses { throw GeminiWhatIfError.serviceUnavailable }
         throw GeminiWhatIfError.rateLimited
     }

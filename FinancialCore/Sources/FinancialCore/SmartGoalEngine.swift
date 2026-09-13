@@ -321,6 +321,7 @@ public enum SmartGoalEngine {
             reserved: reservedForHigherPriority,
             from: profile.asOfDate,
             through: alternativeHorizon(profile.asOfDate, planningHorizon, calendar),
+            protectingThrough: effectiveDeadline,
             calendar: calendar
         )
         let delta = completion.flatMap {
@@ -378,6 +379,7 @@ public enum SmartGoalEngine {
         reserved: Double,
         from start: Date,
         through end: Date,
+        protectingThrough deadline: Date,
         calendar: Calendar
     ) throws -> Date? {
         guard remaining > 0 else { return start }
@@ -387,9 +389,45 @@ public enum SmartGoalEngine {
         candidates.append(contentsOf: profile.institutionalMinimums.compactMap { minimum in
             minimum.endDate.flatMap { calendar.date(byAdding: .day, value: 1, to: $0) }
         })
-        for date in Set(candidates).sorted() where date >= start && date <= end {
+        let candidateDays = Set(candidates.map { calendar.startOfDay(for: $0) })
+        let normalizedStart = calendar.startOfDay(for: start)
+        let normalizedDeadline = calendar.startOfDay(for: deadline)
+        let normalizedEnd = calendar.startOfDay(for: end)
+
+        // Precompute each candidate's lowest later headroom before the deadline in
+        // one backward pass. This is materially cheaper than running a full daily
+        // horizon scan again for every weekly or monthly income occurrence.
+        var sustainableBeforeDeadline: [Date: Double] = [:]
+        if normalizedDeadline > normalizedStart {
+            var date = normalizedDeadline
+            var suffixMinimum = Double.greatestFiniteMagnitude
+            while date >= normalizedStart {
+                let forecast = try FinancialEngine.forecast(profile: profile, targetDate: date, calendar: calendar)
+                suffixMinimum = min(suffixMinimum, forecast.recommendedHeadroom)
+                if candidateDays.contains(date) {
+                    sustainableBeforeDeadline[date] = suffixMinimum
+                }
+                guard let previous = calendar.date(byAdding: .day, value: -1, to: date), previous < date else { break }
+                date = previous
+            }
+        }
+
+        for date in candidateDays.sorted() where date >= normalizedStart && date <= normalizedEnd {
             let forecast = try FinancialEngine.forecast(profile: profile, targetDate: date, calendar: calendar)
-            if forecast.recommendedHeadroom - reserved >= remaining { return date }
+            let sustainableHeadroom: Double
+            if date < normalizedDeadline {
+                // Money is only genuinely available for a goal before its target date
+                // when allocating it would not create a later cash shortage before the
+                // deadline. This prevents a large current balance from producing a false
+                // "funded today" ETA while rent or another obligation is about to land.
+                sustainableHeadroom = min(
+                    forecast.recommendedHeadroom,
+                    sustainableBeforeDeadline[date] ?? forecast.recommendedHeadroom
+                )
+            } else {
+                sustainableHeadroom = forecast.recommendedHeadroom
+            }
+            if sustainableHeadroom - reserved >= remaining { return date }
         }
         return nil
     }
@@ -437,4 +475,3 @@ public enum SmartGoalEngine {
         return flexibility * 10 - health.goal.priority.weight + health.shortfall / max(1, health.goal.targetAmount)
     }
 }
-

@@ -75,4 +75,86 @@ final class AdvancedWhatIfScenarioTests: XCTestCase {
         XCTAssertLessThan(result.projected.minimumRecommendedHeadroom, result.baseline.minimumRecommendedHeadroom)
         XCTAssertFalse(result.smartGoalImpacts.isEmpty)
     }
+
+    func testPurchaseCapacityProtectsImportantGoalAndCommittedRent() throws {
+        let asOf = date(2026, 9, 12)
+        let profile = FinancialProfile(
+            currentCash: 2_350,
+            asOfDate: asOf,
+            expenseEvents: [
+                ExpenseEvent(amount: 200, date: date(2026, 10, 1), category: "Rent"),
+                ExpenseEvent(amount: 200, date: date(2026, 11, 1), category: "Rent")
+            ],
+            goals: [
+                Goal(
+                    name: "Two-month objective",
+                    targetAmount: 700,
+                    deadline: date(2026, 11, 12),
+                    priority: .medium
+                )
+            ],
+            spendingPolicy: SpendingPolicy(bufferWeeks: 0)
+        )
+        let scenario = WhatIfScenario(title: "Mac", changes: [
+            WhatIfCashFlowChange(
+                direction: .expense,
+                amount: 1_300,
+                startDate: asOf,
+                label: "Mac"
+            )
+        ])
+
+        let result = try FinancialInsights.analyzeWhatIfScenario(
+            profile: profile,
+            scenario: scenario,
+            planningHorizon: date(2026, 11, 12),
+            availableToSpendNow: 550,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(result.baseline.safeToSpendNow, 550, accuracy: 0.001)
+        XCTAssertEqual(result.projected.safeToSpendNow, 0, accuracy: 0.001)
+        XCTAssertFalse(result.worsenedSmartGoals.isEmpty)
+        XCTAssertLessThan(result.safeToSpendChange, 0)
+    }
+
+    func testPurchaseProducesFiniteGoalDelayFromExpectedCashFlowDates() throws {
+        let asOf = date(2026, 9, 12)
+        let goal = Goal(
+            name: "Trip",
+            targetAmount: 700,
+            deadline: date(2026, 11, 11),
+            priority: .medium
+        )
+        let profile = FinancialProfile(
+            currentCash: 1_000,
+            asOfDate: asOf,
+            incomeEvents: [
+                IncomeEvent(amount: 200, date: date(2026, 10, 27), source: "Pay 1", type: .oneTime),
+                IncomeEvent(amount: 200, date: date(2026, 11, 3), source: "Pay 2", type: .oneTime)
+            ],
+            expenseEvents: [
+                ExpenseEvent(amount: 400, date: date(2026, 10, 12), category: "Rent")
+            ],
+            goals: [goal],
+            spendingPolicy: SpendingPolicy(bufferWeeks: 0)
+        )
+        let scenario = WhatIfScenario(title: "Purchase", changes: [
+            WhatIfCashFlowChange(direction: .expense, amount: 150, startDate: asOf, label: "Purchase")
+        ])
+
+        let result = try FinancialInsights.analyzeWhatIfScenario(
+            profile: profile,
+            scenario: scenario,
+            planningHorizon: date(2027, 9, 12),
+            availableToSpendNow: 500,
+            calendar: calendar
+        )
+        let impact = try XCTUnwrap(result.smartGoalImpacts.first)
+
+        XCTAssertEqual(impact.projectedCompletionDateBefore, date(2026, 10, 27))
+        XCTAssertEqual(impact.projectedCompletionDateAfter, date(2026, 11, 3))
+        XCTAssertEqual(impact.projectedCompletionDateChangeInDays, 7)
+        XCTAssertTrue(impact.worsened)
+    }
 }

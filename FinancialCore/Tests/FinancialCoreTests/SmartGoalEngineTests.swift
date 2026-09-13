@@ -46,6 +46,22 @@ final class SmartGoalEngineTests: XCTestCase {
         XCTAssertEqual(health.projectedAmountAtDeadline, 1_000, accuracy: 0.001)
     }
 
+    func testCompletionDateProtectsKnownBillsBeforeCallingCashAvailable() throws {
+        let item = goal(target: 700, days: 60)
+        var input = profile(cash: 1_000, goals: [item])
+        input.expenseEvents = [
+            ExpenseEvent(amount: 400, date: date(30), category: "Rent")
+        ]
+        input.incomeEvents = [
+            IncomeEvent(amount: 200, date: date(45), source: "Pay", type: .oneTime)
+        ]
+
+        let health = try XCTUnwrap(SmartGoalEngine.evaluate(profile: input, calendar: calendar).goals.first)
+
+        XCTAssertEqual(health.projectedCompletionDate, date(45))
+        XCTAssertNotEqual(health.projectedCompletionDate, today)
+    }
+
     func testGoalAhead() throws {
         let health = try XCTUnwrap(SmartGoalEngine.evaluate(
             profile: profile(cash: 1_000, goals: [goal(days: 90)]), calendar: calendar
@@ -211,4 +227,3 @@ final class SmartGoalEngineTests: XCTestCase {
         XCTAssertEqual(decoded.lifecycleState, .paused)
     }
 }
-

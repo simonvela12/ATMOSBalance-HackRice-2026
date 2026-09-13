@@ -3,6 +3,32 @@ import Charts
 import FinanceCore
 import FinancialCore
 
+private enum MainScrollTracking {
+    static let coordinateSpace = "main-financial-scroll"
+    static let balanceActivationY: CGFloat = 12
+}
+
+private struct PrimaryBalanceBottomPreferenceKey: PreferenceKey {
+    static var defaultValue = CGFloat.greatestFiniteMagnitude
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+private extension View {
+    func tracksPrimaryBalanceBottom() -> some View {
+        background {
+            GeometryReader { geometry in
+                Color.clear.preference(
+                    key: PrimaryBalanceBottomPreferenceKey.self,
+                    value: geometry.frame(in: .named(MainScrollTracking.coordinateSpace)).maxY
+                )
+            }
+        }
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject private var bankStore: BankAccountStore
     @State private var selectedMonth = ForecastMonth.september
@@ -25,6 +51,7 @@ struct ContentView: View {
     @State private var excludedOccurrences: Set<String> = []
     @State private var occurrenceNameOverrides: [String: String] = [:]
     @State private var hasRestoredUserPlan = false
+    @State private var showsCompactBalance = false
     @AppStorage("safetyBufferMode") private var safetyBufferModeRaw = SafetyBufferMode.automatic.rawValue
     @AppStorage("customSafetyBuffer") private var customSafetyBuffer = 0.0
 
@@ -111,6 +138,7 @@ struct ContentView: View {
         GoalPlanningService.snapshot(
             goals: goals,
             entries: addedEntries,
+            excludingOccurrences: excludedOccurrences,
             accounts: bankStore.accounts,
             transactions: bankStore.transactions,
             fallbackBalance: month.accountBalance,
@@ -185,6 +213,24 @@ struct ContentView: View {
                 .padding(.bottom, 28)
             }
             .scrollIndicators(.hidden)
+            .coordinateSpace(name: MainScrollTracking.coordinateSpace)
+            .onPreferenceChange(PrimaryBalanceBottomPreferenceKey.self) { bottom in
+                let shouldShow = bottom <= MainScrollTracking.balanceActivationY
+                guard shouldShow != showsCompactBalance else { return }
+                withAnimation(.snappy(duration: 0.32)) {
+                    showsCompactBalance = shouldShow
+                }
+            }
+
+            if !isInsightsPreview, showsCompactBalance {
+                VStack(spacing: 0) {
+                    stickyScrollHeader
+                    Spacer(minLength: 0)
+                }
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .zIndex(10)
+                .allowsHitTesting(false)
+            }
         }
         .preferredColorScheme(.dark)
         .task { restoreUserPlan() }
@@ -192,7 +238,6 @@ struct ContentView: View {
             guard hasRestoredUserPlan else { return }
             PlanPersistence.save(plan)
         }
-        .animation(.easeInOut(duration: 0.45), value: selectedMonth)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             whatIfButton
         }
@@ -319,11 +364,17 @@ struct ContentView: View {
     private var topBar: some View {
         HStack(spacing: 12) {
             Button { showingFinancialSettings = true } label: {
-                Image(systemName: "gearshape.fill")
-                    .font(.system(size: 16, weight: .semibold))
-                    .frame(width: 34, height: 34)
-                    .background(.white.opacity(0.12), in: Circle())
+                ZStack {
+                    Circle()
+                        .fill(.white.opacity(0.12))
+                        .frame(width: 36, height: 36)
+                    Image(systemName: "gearshape.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                }
+                .frame(width: 50, height: 50)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
             .accessibilityLabel("Financial settings")
 
             Spacer()
@@ -335,7 +386,10 @@ struct ContentView: View {
                     .font(.system(size: 30))
                     .symbolRenderingMode(.hierarchical)
                     .foregroundStyle(.white.opacity(0.92))
+                    .frame(width: 50, height: 50)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
             .accessibilityLabel("Bank connection")
         }
         .foregroundStyle(.white)
@@ -356,6 +410,7 @@ struct ContentView: View {
                 .minimumScaleFactor(0.65)
                 .foregroundStyle(selectedMonth.isCurrent ? .white : .white.opacity(0.58))
                 .contentTransition(.numericText(value: month.accountBalance))
+                .tracksPrimaryBalanceBottom()
 
             Text(month.balanceLabel)
                 .font(.helvetica(.title3, weight: .medium))
@@ -425,6 +480,54 @@ struct ContentView: View {
         .padding(.top, 8)
         .padding(.bottom, 26)
         .accessibilityElement(children: .combine)
+    }
+
+    private var stickyScrollHeader: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(selectedMonth.isCurrent ? "CURRENT BALANCE" : "\(month.month.displayName.uppercased()) CLOSING BALANCE")
+                    .font(.helvetica(.caption2, weight: .bold))
+                    .tracking(0.8)
+                    .foregroundStyle(.white.opacity(0.58))
+                Text(month.accountBalance.currencyText)
+                    .font(.helvetica(size: 27, weight: .semibold))
+                    .tracking(-0.7)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                    .foregroundStyle(selectedMonth.isCurrent ? .white : .white.opacity(0.68))
+                    .contentTransition(.numericText(value: month.accountBalance))
+            }
+            Spacer(minLength: 8)
+            Image(systemName: presentationWeather.symbol)
+                .font(.system(size: 20, weight: .semibold))
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(presentationWeather.primaryColor, presentationWeather.secondaryColor)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 11)
+        .background {
+            ZStack {
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                LinearGradient(
+                    colors: [
+                        presentationWeather.backgroundColors.first?.opacity(0.74) ?? Color.deepNavy,
+                        presentationWeather.backgroundColors.last?.opacity(0.66) ?? Color.deepNavy
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            }
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                .stroke(.white.opacity(0.15), lineWidth: 0.75)
+        }
+        .shadow(color: .black.opacity(0.2), radius: 12, y: 4)
+        .padding(.horizontal, 20)
+        .padding(.top, 8)
+        .foregroundStyle(.white)
     }
 
     private var monthSelector: some View {
@@ -2079,12 +2182,14 @@ private struct WhatIfSheet: View {
     @State private var inputMode = WhatIfInputMode.quick
     @State private var scenarioText = ""
     @State private var interpretedScenario: WhatIfScenario?
+    @State private var quickAnalysis: WhatIfScenarioAnalysis?
     @State private var aiAnalysis: WhatIfScenarioAnalysis?
     @State private var aiExplanation = ""
     @State private var aiSources: [GeminiAdviceSource] = []
     @State private var aiUsedLiveSearch = true
     @State private var aiError: String?
     @State private var isAnalyzing = false
+    @FocusState private var focusedField: WhatIfFocusedField?
 
     private var amount: Double { amountText.moneyValue ?? 0 }
     private var planningHorizon: Date {
@@ -2111,17 +2216,10 @@ private struct WhatIfSheet: View {
             )]
         )
     }
-    private var manualAnalysis: WhatIfScenarioAnalysis? {
-        guard let manualScenario else { return nil }
-        return try? FinancialInsights.analyzeWhatIfScenario(profile: profile, scenario: manualScenario, planningHorizon: planningHorizon)
+    private var quickAnalysisKey: String {
+        [inputMode == .quick ? "quick" : "gemini", amountText, schedule.rawValue, String(repeatEvery), repeatUnit.rawValue].joined(separator: "|")
     }
-    private var activeAnalysis: WhatIfScenarioAnalysis? { inputMode == .quick ? manualAnalysis : aiAnalysis }
-    private var currentAllocations: [UUID: Double] {
-        GoalAllocation.plan(for: goals, availableBalance: spendableBalance)
-    }
-    private var projectedAllocations: [UUID: Double] {
-        GoalAllocation.plan(for: goals, availableBalance: activeAnalysis?.projected.safeToSpendNow ?? spendableBalance)
-    }
+    private var activeAnalysis: WhatIfScenarioAnalysis? { inputMode == .quick ? quickAnalysis : aiAnalysis }
     private var resultWeather: MoneyWeather {
         guard let status = activeAnalysis?.projected.horizonStatus else { return .cloudy }
         switch status { case .safe: return .partlySunny; case .tight: return .rain; case .notSafe: return .storm }
@@ -2145,6 +2243,7 @@ private struct WhatIfSheet: View {
                     if inputMode == .quick {
                         EntryCard(title: "PURCHASE AMOUNT") {
                             CurrencyField(text: $amountText, placeholder: "80")
+                                .focused($focusedField, equals: .quickAmount)
                         }
 
                         EntryCard(title: "TYPE") {
@@ -2172,6 +2271,7 @@ private struct WhatIfSheet: View {
                     } else {
                         EntryCard(title: "DESCRIBE THE SCENARIO") {
                             TextEditor(text: $scenarioText)
+                                .focused($focusedField, equals: .scenario)
                                 .frame(minHeight: 96)
                                 .scrollContentBackground(.hidden)
                                 .padding(8)
@@ -2188,16 +2288,18 @@ private struct WhatIfSheet: View {
                                 .font(.helvetica(.caption))
                                 .foregroundStyle(.white.opacity(0.58))
                             Button {
+                                focusedField = nil
                                 analyzeNaturalLanguageScenario()
                             } label: {
                                 HStack {
                                     if isAnalyzing { ProgressView().tint(.white) }
                                     Text(isAnalyzing ? "Analyzing…" : "Analyze scenario").font(.helvetica(.headline, weight: .bold))
                                 }
-                                .frame(maxWidth: .infinity).padding(.vertical, 12)
+                                .frame(maxWidth: .infinity, minHeight: 52)
+                                .contentShape(Rectangle())
+                                .background(.white.opacity(scenarioText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.10 : 0.22), in: RoundedRectangle(cornerRadius: 11))
                             }
                             .buttonStyle(.plain)
-                            .background(.white.opacity(scenarioText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.10 : 0.22), in: RoundedRectangle(cornerRadius: 11))
                             .disabled(isAnalyzing || scenarioText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                             if let aiError { Text(aiError).font(.helvetica(.caption, weight: .semibold)).foregroundStyle(Color.sunGold) }
                         }
@@ -2221,7 +2323,7 @@ private struct WhatIfSheet: View {
 
                     if let analysis = activeAnalysis {
                         VStack(spacing: 0) {
-                            ScenarioMetric(title: "Financial health", value: "\(analysis.baseline.horizonStatus.displayText) → \(analysis.projected.horizonStatus.displayText)")
+                            ScenarioMetric(title: "Long-term outlook", value: healthTransitionText(for: analysis))
                             Divider().overlay(.white.opacity(0.12))
                             ScenarioMetric(title: "Safe to spend", value: "\(analysis.baseline.safeToSpendNow.currencyText) → \(analysis.projected.safeToSpendNow.currencyText)")
                             Divider().overlay(.white.opacity(0.12))
@@ -2239,7 +2341,7 @@ private struct WhatIfSheet: View {
                                         .font(.helvetica(.caption, weight: .bold))
                                         .tracking(1.1)
                                         .foregroundStyle(.white.opacity(0.68))
-                                    Text("How your priorities would move")
+                                    Text("Effect on each target date")
                                         .font(.helvetica(.headline, weight: .semibold))
                                 }
                                 Spacer()
@@ -2247,12 +2349,14 @@ private struct WhatIfSheet: View {
                                     .font(.system(size: 24, weight: .semibold))
                                     .foregroundStyle(Color.sunGold)
                             }
+                            Text("Compares your current balance, confirmed goal savings, usual spending, safety buffer, expected income and planned expenses before and after this decision.")
+                                .font(.helvetica(.caption))
+                                .foregroundStyle(.white.opacity(0.56))
+                                .fixedSize(horizontal: false, vertical: true)
                             ForEach(goals) { goal in
                                 let impact = analysis.smartGoalImpacts.first(where: { $0.goal.id == goal.id })
                                 WhatIfGoalRow(
                                     goal: goal,
-                                    currentAllocation: currentAllocations[goal.id] ?? 0,
-                                    projectedAllocation: projectedAllocations[goal.id] ?? 0,
                                     advancedImpact: impact
                                 )
                             }
@@ -2301,8 +2405,43 @@ private struct WhatIfSheet: View {
                 .padding(.bottom, 28)
             }
             .scrollIndicators(.hidden)
+            .scrollDismissesKeyboard(.interactively)
         }
         .preferredColorScheme(.dark)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") { focusedField = nil }
+                    .font(.helvetica(.headline, weight: .semibold))
+            }
+        }
+        .onChange(of: inputMode) { _, _ in focusedField = nil }
+        .task(id: quickAnalysisKey) {
+            guard inputMode == .quick else { return }
+            guard let scenario = manualScenario else {
+                quickAnalysis = nil
+                return
+            }
+
+            // Do not run the full daily cash-flow, three-scenario and goal analysis
+            // for every individual key press. A short cancellable debounce keeps the
+            // amount field responsive, then the calculation runs off the UI thread.
+            try? await Task.sleep(for: .milliseconds(280))
+            guard !Task.isCancelled else { return }
+            let profileSnapshot = profile
+            let horizonSnapshot = planningHorizon
+            let spendableSnapshot = spendableBalance
+            let result = await Task.detached(priority: .userInitiated) {
+                try? FinancialInsights.analyzeWhatIfScenario(
+                    profile: profileSnapshot,
+                    scenario: scenario,
+                    planningHorizon: horizonSnapshot,
+                    availableToSpendNow: spendableSnapshot
+                )
+            }.value
+            guard !Task.isCancelled else { return }
+            quickAnalysis = result
+        }
         .animation(.easeInOut(duration: 0.3), value: schedule)
         .animation(.easeInOut(duration: 0.3), value: resultWeather)
     }
@@ -2316,13 +2455,15 @@ private struct WhatIfSheet: View {
         Task {
             do {
                 let scenario = try await GeminiWhatIfService.interpret(scenarioText, asOfDate: profile.asOfDate, horizon: planningHorizon)
-                let result = try FinancialInsights.analyzeWhatIfScenario(profile: profile, scenario: scenario, planningHorizon: planningHorizon)
+                let result = try FinancialInsights.analyzeWhatIfScenario(
+                    profile: profile,
+                    scenario: scenario,
+                    planningHorizon: planningHorizon,
+                    availableToSpendNow: spendableBalance
+                )
                 interpretedScenario = scenario
                 aiAnalysis = result
                 do {
-                    // Gemini's development-tier quotas are commonly request-per-minute based.
-                    // Space interpretation and explanation so the second request is not rejected.
-                    try? await Task.sleep(for: .seconds(13))
                     let advice = try await GeminiWhatIfService.explain(result)
                     aiExplanation = advice.text
                     aiSources = advice.sources
@@ -2330,7 +2471,7 @@ private struct WhatIfSheet: View {
                 }
                 catch {
                     aiExplanation = localRecommendation(for: result)
-                    aiError = "Gemini is temporarily unavailable, so this recommendation was generated on-device from the completed financial result."
+                    aiError = nil
                 }
             } catch { aiError = error.localizedDescription }
             isAnalyzing = false
@@ -2349,7 +2490,7 @@ private struct WhatIfSheet: View {
                 aiUsedLiveSearch = advice.usedLiveSearch
             } catch {
                 aiExplanation = localRecommendation(for: result)
-                aiError = "Gemini is temporarily unavailable, so this recommendation was generated on-device from the completed financial result."
+                aiError = nil
             }
             isAnalyzing = false
         }
@@ -2368,9 +2509,23 @@ private struct WhatIfSheet: View {
         }
         return "This fits within the current plan, but it is still worth checking whether you need it now. Waiting for a discount or choosing used, refurbished, or a lower-tier option would preserve more flexibility for your goals and unexpected expenses."
     }
+
+    private func healthTransitionText(for analysis: WhatIfScenarioAnalysis) -> String {
+        let before = analysis.baseline.horizonStatus
+        let after = analysis.projected.horizonStatus
+        guard before == after else { return "\(before.displayText) → \(after.displayText)" }
+        if analysis.safeToSpendChange < -0.005 {
+            return before == .notSafe ? "Constrained → more pressure" : "\(before.displayText) → less room"
+        }
+        if analysis.safeToSpendChange > 0.005 {
+            return "\(before.displayText) → improving"
+        }
+        return "\(before.displayText) → unchanged"
+    }
 }
 
 private enum WhatIfInputMode: Hashable { case quick, gemini }
+private enum WhatIfFocusedField: Hashable { case quickAmount, scenario }
 
 private extension FinancialHealthStatus {
     var displayText: String { rawValue.replacingOccurrences(of: "_", with: " ").capitalized }
@@ -2380,20 +2535,94 @@ private extension FinancialScenario {
     var displayText: String { rawValue.capitalized }
 }
 
+private extension FinancialCore.GoalStatus {
+    var displayText: String {
+        switch self {
+        case .ahead: return "Ahead"
+        case .onTrack: return "On track"
+        case .behind: return "Behind"
+        case .atRisk: return "At risk"
+        case .unrealistic: return "Unrealistic"
+        case .completed: return "Completed"
+        case .paused: return "Paused"
+        }
+    }
+}
+
 private struct WhatIfGoalRow: View {
     let goal: FinancialGoal
-    let currentAllocation: Double
-    let projectedAllocation: Double
     let advancedImpact: WhatIfSmartGoalImpact?
 
-    private var allocationLoss: Double { max(0, currentAllocation - projectedAllocation) }
-    private var daysUntilGoal: Double {
-        max(1, Calendar.current.dateComponents([.day], from: MockForecast.todayDate, to: goal.targetDate).day.map(Double.init) ?? 1)
+    private var fundingImpactText: String {
+        guard let impact = advancedImpact else { return "No calculated change" }
+        if impact.shortfallChange > 0.005 {
+            return "+\(impact.shortfallChange.currencyText) needed"
+        }
+        if impact.shortfallChange < -0.005 {
+            return "\(abs(impact.shortfallChange).currencyText) less needed"
+        }
+        if impact.weeklySavingsChange > 0.005 {
+            return "+\(impact.weeklySavingsChange.currencyText)/week"
+        }
+        if impact.weeklySavingsChange < -0.005 {
+            return "\(abs(impact.weeklySavingsChange).currencyText)/week less"
+        }
+        if impact.shortfallAfter <= 0.005 { return "Still funded by target" }
+        return "No measurable change"
     }
-    private var dailyFundingRate: Double { max(18, currentAllocation / daysUntilGoal) }
-    private var delayDays: Int {
-        if let value = advancedImpact?.projectedCompletionDateChangeInDays { return max(0, value) }
-        return allocationLoss == 0 ? 0 : Int(ceil(allocationLoss / dailyFundingRate))
+
+    private var fundingImpactColor: Color {
+        guard let impact = advancedImpact else { return .white.opacity(0.5) }
+        if impact.shortfallChange > 0.005 || impact.weeklySavingsChange > 0.005 { return Color.sunGold }
+        if impact.shortfallChange < -0.005 || impact.weeklySavingsChange < -0.005 { return Color.rainMist }
+        return .white.opacity(0.5)
+    }
+
+    private var timingText: String {
+        guard let impact = advancedImpact else { return "Not enough data for timing" }
+        guard let days = impact.projectedCompletionDateChangeInDays else {
+            if impact.projectedCompletionDateBefore == nil && impact.projectedCompletionDateAfter == nil {
+                return "No reliable completion date on the current plan"
+            }
+            return impact.worsened ? "Completion timing is less certain" : "No measurable timing change"
+        }
+        if days == Int.max { return "No projected completion within the forecast" }
+        if days > 3_650 { return "Delay extends beyond the forecast" }
+        if days > 0 { return "About \(days) day\(days == 1 ? "" : "s") later" }
+        if days < 0 { return "About \(abs(days)) day\(days == -1 ? "" : "s") sooner" }
+        if impact.shortfallChange > 0.005 { return "Same projected date, but less margin" }
+        return "No measurable timing change"
+    }
+
+    private var timingColor: Color {
+        guard let impact = advancedImpact else { return .white.opacity(0.55) }
+        let days = impact.projectedCompletionDateChangeInDays
+        if days == Int.max || (days ?? 0) > 0 || impact.worsened { return Color.sunGold }
+        if (days ?? 0) < 0 { return Color.rainMist }
+        return .white.opacity(0.62)
+    }
+
+    private var timingSymbol: String {
+        guard let impact = advancedImpact else { return "questionmark.circle" }
+        let days = impact.projectedCompletionDateChangeInDays
+        if days == Int.max || (days ?? 0) > 0 || impact.worsened { return "calendar.badge.clock" }
+        if (days ?? 0) < 0 { return "arrow.down.right.circle.fill" }
+        return "checkmark.circle.fill"
+    }
+
+    private var statusText: String {
+        guard let impact = advancedImpact else { return "Status unavailable" }
+        if impact.statusBefore == impact.statusAfter { return impact.statusAfter.displayText }
+        return "\(impact.statusBefore.displayText) → \(impact.statusAfter.displayText)"
+    }
+
+    private var fundingExplanation: String? {
+        guard let impact = advancedImpact else { return nil }
+        let target = goal.targetDate.formatted(.dateTime.month(.abbreviated).day())
+        if impact.shortfallAfter > 0.005 {
+            return "Forecast gap by \(target): \(impact.shortfallAfter.currencyText). To keep that date, the uncovered portion is about \(impact.additionalWeeklySavingsAfter.currencyText)/week."
+        }
+        return "Your forecast still covers the remaining goal amount by \(target)."
     }
 
     var body: some View {
@@ -2409,22 +2638,29 @@ private struct WhatIfGoalRow: View {
                     PriorityBadge(priority: goal.priority)
                 }
                 Spacer()
-                Text(allocationLoss.negativeCurrencyText)
-                    .font(.helvetica(.headline, weight: .bold))
-                    .foregroundStyle(allocationLoss > 0 ? Color.sunGold : .white.opacity(0.5))
+                Text(fundingImpactText)
+                    .font(.helvetica(.subheadline, weight: .bold))
+                    .foregroundStyle(fundingImpactColor)
+                    .multilineTextAlignment(.trailing)
             }
 
             HStack {
-                Label(
-                    delayDays == 0 ? "No expected delay" : "About \(delayDays) day\(delayDays == 1 ? "" : "s") later",
-                    systemImage: delayDays == 0 ? "checkmark.circle.fill" : "calendar.badge.clock"
-                )
+                Label(timingText, systemImage: timingSymbol)
                 .font(.helvetica(.subheadline, weight: .bold))
-                .foregroundStyle(delayDays == 0 ? Color.rainMist : Color.sunGold)
+                .foregroundStyle(timingColor)
+                .lineLimit(2)
                 Spacer()
-                Text("\(projectedAllocation.currencyText) still allocated")
+                Text(statusText)
                     .font(.helvetica(.caption2))
                     .foregroundStyle(.white.opacity(0.5))
+                    .multilineTextAlignment(.trailing)
+            }
+
+            if let fundingExplanation {
+                Text(fundingExplanation)
+                    .font(.helvetica(.caption2))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(14)
@@ -3528,9 +3764,25 @@ private struct GoalPlanningSnapshot {
 }
 
 private enum GoalPlanningService {
+    private struct CacheKey: Equatable {
+        let goals: [FinancialGoal]
+        let entries: [FinancialEntry]
+        let excludedOccurrences: Set<String>
+        let accounts: [FinancialAccount]
+        let transactions: [FinancialTransaction]
+        let fallbackBalance: Double
+        let bufferMode: SafetyBufferMode
+        let customBuffer: Double
+        let asOf: Date
+    }
+
+    nonisolated(unsafe) private static var cachedKey: CacheKey?
+    nonisolated(unsafe) private static var cachedSnapshot: GoalPlanningSnapshot?
+
     static func snapshot(
         goals: [FinancialGoal],
         entries: [FinancialEntry],
+        excludingOccurrences: Set<String> = [],
         accounts: [FinancialAccount],
         transactions: [FinancialTransaction],
         fallbackBalance: Double,
@@ -3540,16 +3792,64 @@ private enum GoalPlanningService {
     ) -> GoalPlanningSnapshot {
         let calendar = Calendar.current
         let asOf = calendar.startOfDay(for: now)
-        let horizon = goals.map(\.targetDate).max() ?? (calendar.date(byAdding: .year, value: 1, to: asOf) ?? asOf)
+        let cacheKey = CacheKey(
+            goals: goals,
+            entries: entries,
+            excludedOccurrences: excludingOccurrences,
+            accounts: accounts,
+            transactions: transactions,
+            fallbackBalance: fallbackBalance,
+            bufferMode: bufferMode,
+            customBuffer: customBuffer,
+            asOf: asOf
+        )
+        if cachedKey == cacheKey, let cachedSnapshot {
+            return cachedSnapshot
+        }
+        // Expense preparation must not silently change its time window when a goal
+        // is added or removed. Always plan at least one year ahead, extending only
+        // when an active goal has a later deadline.
+        let oneYearHorizon = calendar.date(byAdding: .year, value: 1, to: asOf) ?? asOf
+        let horizon = max(oneYearHorizon, goals.map(\.targetDate).max() ?? oneYearHorizon)
         var incomes: [IncomeEvent] = []
         var expenses: [ExpenseEvent] = []
 
         for entry in entries {
-            for date in entry.occurrenceDates(through: horizon) where date >= asOf {
+            for date in entry.occurrenceDates(through: horizon)
+            where date >= asOf && !excludingOccurrences.contains(entry.occurrenceKey(for: date)) {
                 if entry.kind == .income {
                     incomes.append(IncomeEvent(amount: entry.amount, date: date, source: entry.name, type: entry.schedule == .recurring ? .recurring : .oneTime))
                 } else {
                     expenses.append(ExpenseEvent(amount: entry.amount, date: date, category: entry.name, essential: true, committed: true))
+                }
+            }
+        }
+
+        // A connected account can provide useful evidence about regular income even
+        // before the user creates a future income entry. Only add a conservative,
+        // pattern-based projection when no explicit recurring income already exists.
+        // These remain uncertain income events: conservative scenarios ignore them,
+        // expected scenarios use 70%, and optimistic scenarios use the observed pace.
+        if !incomes.contains(where: { $0.type == .recurring }) {
+            let observedWeeklyIncome = historicalWeeklyIncomeEstimate(
+                transactions: transactions,
+                asOf: asOf,
+                calendar: calendar
+            )
+            if observedWeeklyIncome > 0.005 {
+                var date = calendar.date(byAdding: .day, value: 7, to: asOf) ?? horizon
+                while date <= horizon {
+                    incomes.append(IncomeEvent(
+                        amount: observedWeeklyIncome,
+                        date: date,
+                        source: "Income pattern estimate",
+                        type: .irregular,
+                        confidence: 0.70,
+                        planningSource: .derivedMatch,
+                        planningStatus: .planned
+                    ))
+                    guard let next = calendar.date(byAdding: .day, value: 7, to: date), next > date else { break }
+                    date = next
                 }
             }
         }
@@ -3585,9 +3885,6 @@ private enum GoalPlanningService {
         case .conservative: bufferPolicy = SpendingPolicy(lookbackWeeks: 6, bufferWeeks: 4)
         case .custom: bufferPolicy = SpendingPolicy(lookbackWeeks: 6, bufferWeeks: 0, manualMinimumBuffer: customBuffer)
         }
-        if incomes.isEmpty {
-            incomes = inferredIncomeEvents(transactions: transactions, asOf: asOf, through: horizon, calendar: calendar)
-        }
         let profile = FinancialProfile(
             currentCash: liquidCash,
             asOfDate: asOf,
@@ -3610,7 +3907,13 @@ private enum GoalPlanningService {
             GoalContributionSnapshot(id: $0.goalID, name: $0.goalName, amount: $0.recommendedContribution)
         } ?? []
         let recommendedTotal = balance?.additionalGoalContributionTotal ?? 0
-        let futureExpensePreparation = futureExpenseReserve(expenses: expenses, asOf: asOf, calendar: calendar)
+        let futureExpensePreparation = futureExpenseReserve(
+            entries: entries,
+            excludingOccurrences: excludingOccurrences,
+            asOf: asOf,
+            through: horizon,
+            calendar: calendar
+        )
         let computedSpendable = (balance?.liquidBalanceAfterGoalPlan ?? liquid) - allocated - futureExpensePreparation
         let conflictMessage: String?
         if let delayedID = portfolio?.recommendedGoalToDelayID,
@@ -3618,7 +3921,10 @@ private enum GoalPlanningService {
             conflictMessage = "Goals compete for available money. Consider moving \(delayed.name) to a later date."
         } else { conflictMessage = nil }
 
-        return GoalPlanningSnapshot(profile: profile, insights: insights, totalBalance: total, liquidBalance: liquid, safetyBuffer: balance?.safetyBuffer ?? 0, automaticBuffer: automaticBuffer, conservativeBuffer: conservativeBuffer, recommendedContributionTotal: recommendedTotal, futureExpensePreparation: futureExpensePreparation, spendableBalance: computedSpendable, contributions: recommendations, conflictMessage: conflictMessage)
+        let snapshot = GoalPlanningSnapshot(profile: profile, insights: insights, totalBalance: total, liquidBalance: liquid, safetyBuffer: balance?.safetyBuffer ?? 0, automaticBuffer: automaticBuffer, conservativeBuffer: conservativeBuffer, recommendedContributionTotal: recommendedTotal, futureExpensePreparation: futureExpensePreparation, spendableBalance: computedSpendable, contributions: recommendations, conflictMessage: conflictMessage)
+        cachedKey = cacheKey
+        cachedSnapshot = snapshot
+        return snapshot
     }
 
     private static func corePriority(_ priority: GoalPriority) -> FinancialCore.GoalPriority {
@@ -3649,47 +3955,53 @@ private enum GoalPlanningService {
         }
     }
 
-    private static func futureExpenseReserve(expenses: [ExpenseEvent], asOf: Date, calendar: Calendar) -> Double {
-        let nearTermEnd = calendar.date(byAdding: .day, value: 30, to: asOf) ?? asOf
-        return expenses
-            .filter { $0.committed && $0.date > nearTermEnd }
-            .reduce(0) { $0 + $1.amount }
-    }
-
-    private static func inferredIncomeEvents(transactions: [FinancialTransaction], asOf: Date, through horizon: Date, calendar: Calendar) -> [IncomeEvent] {
-        let start = calendar.date(byAdding: .day, value: -42, to: asOf) ?? asOf
-        let inflows = transactions.filter { $0.direction == .inflow && !$0.isTransfer && $0.transactionDate >= start && $0.transactionDate < asOf }
-        guard !inflows.isEmpty else { return [] }
-        let weeklyAverage = inflows.reduce(0) { $0 + Double($1.amountMinorUnits) / 100 } / 6
-        guard weeklyAverage > 0.005 else { return [] }
-        var result: [IncomeEvent] = []
-        var date = calendar.date(byAdding: .day, value: 7, to: asOf) ?? asOf
-        while date <= horizon {
-            result.append(IncomeEvent(amount: weeklyAverage, date: date, source: "Estimated recurring bank income", type: .irregular, confidence: 0.8))
-            guard let next = calendar.date(byAdding: .day, value: 7, to: date) else { break }
-            date = next
-        }
-        return result
-    }
-}
-
-private enum GoalAllocation {
-    static func plan(for goals: [FinancialGoal], availableBalance: Double) -> [UUID: Double] {
-        var available = max(0, availableBalance)
-        var result: [UUID: Double] = [:]
-        let orderedGoals = goals
-            .filter { !$0.isCompleted }
-            .sorted {
-                if $0.priority.rank == $1.priority.rank { return $0.targetDate < $1.targetDate }
-                return $0.priority.rank < $1.priority.rank
+    private static func historicalWeeklyIncomeEstimate(
+        transactions: [FinancialTransaction],
+        asOf: Date,
+        calendar: Calendar
+    ) -> Double {
+        let currentWeek = calendar.dateInterval(of: .weekOfYear, for: asOf)?.start ?? asOf
+        let fourWeekTotals = (0..<2).compactMap { block -> Double? in
+            guard let end = calendar.date(byAdding: .weekOfYear, value: -(block * 4), to: currentWeek),
+                  let start = calendar.date(byAdding: .weekOfYear, value: -4, to: end) else {
+                return nil
             }
-
-        for goal in orderedGoals {
-            let allocation = min(goal.remaining, available)
-            result[goal.id] = allocation.roundedToCents
-            available = max(0, available - allocation)
+            return transactions
+                .filter {
+                    $0.direction == .inflow &&
+                    !$0.isTransfer &&
+                    $0.sourceType != .refund &&
+                    $0.transactionDate >= start &&
+                    $0.transactionDate < end
+                }
+                .reduce(0) { $0 + Double($1.amountMinorUnits) / 100 }
         }
-        return result
+        guard !fourWeekTotals.isEmpty else { return 0 }
+        return max(0, FinancialEngine.median(fourWeekTotals) / 4)
+    }
+
+    private static func futureExpenseReserve(
+        entries: [FinancialEntry],
+        excludingOccurrences: Set<String>,
+        asOf: Date,
+        through horizon: Date,
+        calendar: Calendar
+    ) -> Double {
+        let nearTermEnd = calendar.date(byAdding: .day, value: 30, to: asOf) ?? asOf
+        return entries.reduce(0) { total, entry in
+            guard entry.kind == .payment else { return total }
+            let futureDates = entry.occurrenceDates(through: horizon)
+                .filter {
+                    $0 > nearTermEnd &&
+                    !excludingOccurrences.contains(entry.occurrenceKey(for: $0))
+                }
+            guard !futureDates.isEmpty else { return total }
+
+            // One-time obligations are protected in full. For recurring expenses,
+            // protect the next installment beyond the 30-day committed window rather
+            // than incorrectly reserving an entire year of rent today.
+            return total + (entry.schedule == .recurring ? entry.amount : entry.amount * Double(futureDates.count))
+        }
     }
 }
 
@@ -4241,12 +4553,47 @@ private enum MockForecast {
     static var todayDate: Date { Calendar(identifier: .gregorian).startOfDay(for: Date()) }
     static let horizon = makeDate(year: 2027, month: 9, day: 30)
 
+    private struct ForecastCacheInputs: Equatable {
+        let entries: [FinancialEntry]
+        let excludedForecastDays: Set<String>
+        let excludedOccurrences: Set<String>
+        let occurrenceNameOverrides: [String: String]
+        let accounts: [FinanceCore.FinancialAccount]
+        let transactions: [FinanceCore.FinancialTransaction]
+        let today: Date
+    }
+
+    private struct BalanceCacheInputs: Equatable {
+        let entries: [FinancialEntry]
+        let excludedForecastDays: Set<String>
+        let excludedOccurrences: Set<String>
+        let accounts: [FinanceCore.FinancialAccount]
+        let transactions: [FinanceCore.FinancialTransaction]
+        let today: Date
+    }
+
+    nonisolated(unsafe) private static var forecastCacheInputs: ForecastCacheInputs?
+    nonisolated(unsafe) private static var forecastCache: [ForecastMonth: MonthForecast] = [:]
+    nonisolated(unsafe) private static var balanceCacheInputs: BalanceCacheInputs?
+    nonisolated(unsafe) private static var balanceCache: [BalancePoint] = []
+
     static func balancePoints(
         including entries: [FinancialEntry],
         excludingForecastDays: Set<String> = [],
         excludingOccurrences: Set<String> = [],
         bank: BankForecastContext = .empty
     ) -> [BalancePoint] {
+        let cacheInputs = BalanceCacheInputs(
+            entries: entries,
+            excludedForecastDays: excludingForecastDays,
+            excludedOccurrences: excludingOccurrences,
+            accounts: bank.accounts,
+            transactions: bank.transactions,
+            today: todayDate
+        )
+        if balanceCacheInputs == cacheInputs {
+            return balanceCache
+        }
         let occurrences = entryOccurrences(
             for: entries,
             through: Self.horizon,
@@ -4273,7 +4620,11 @@ private enum MockForecast {
             )
         }
 
-        guard bank.hasData || !entries.isEmpty else { return [] }
+        guard bank.hasData || !entries.isEmpty else {
+            balanceCacheInputs = cacheInputs
+            balanceCache = []
+            return []
+        }
         let currentBalance = adjustedBasePoints
             .filter { $0.date <= todayDate }
             .last?.balance ?? bank.currentBalance
@@ -4312,10 +4663,13 @@ private enum MockForecast {
             )
         }
 
-        return (adjustedBasePoints + expectedPoints).sorted {
+        let result = (adjustedBasePoints + expectedPoints).sorted {
             if $0.date == $1.date { return $0.series.rawValue < $1.series.rawValue }
             return $0.date < $1.date
         }
+        balanceCacheInputs = cacheInputs
+        balanceCache = result
+        return result
     }
 
     /// Theil-Sen-style slope estimate. The median of pairwise slopes is much less
@@ -4351,6 +4705,21 @@ private enum MockForecast {
         occurrenceNameOverrides: [String: String] = [:],
         bank: BankForecastContext = .empty
     ) -> MonthForecast {
+        let cacheInputs = ForecastCacheInputs(
+            entries: entries,
+            excludedForecastDays: excludingForecastDays,
+            excludedOccurrences: excludingOccurrences,
+            occurrenceNameOverrides: occurrenceNameOverrides,
+            accounts: bank.accounts,
+            transactions: bank.transactions,
+            today: todayDate
+        )
+        if forecastCacheInputs != cacheInputs {
+            forecastCacheInputs = cacheInputs
+            forecastCache.removeAll(keepingCapacity: true)
+        } else if let cached = forecastCache[month] {
+            return cached
+        }
         let balanceLabel: String
         if month.isPast {
             balanceLabel = "Closing account balance"
@@ -4398,7 +4767,7 @@ private enum MockForecast {
         )
         let totalSpending = days.reduce(0) { $0 + $1.expenses }
 
-        return MonthForecast(
+        let result = MonthForecast(
             month: month,
             accountBalance: adjustedBalance,
             balanceLabel: balanceLabel,
@@ -4412,6 +4781,8 @@ private enum MockForecast {
             allTimeDelta: 0,
             days: days
         )
+        forecastCache[month] = result
+        return result
     }
 
     private static func makeDays(

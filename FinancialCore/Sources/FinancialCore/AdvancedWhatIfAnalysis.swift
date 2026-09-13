@@ -83,7 +83,15 @@ public struct WhatIfSmartGoalImpact: Sendable {
     public let statusBefore: GoalStatus
     public let statusAfter: GoalStatus
     public let projectedCompletionDateChangeInDays: Int?
+    public let projectedCompletionDateBefore: Date?
+    public let projectedCompletionDateAfter: Date?
+    public let projectedAmountAtDeadlineBefore: Double
+    public let projectedAmountAtDeadlineAfter: Double
+    public let shortfallBefore: Double
+    public let shortfallAfter: Double
     public let shortfallChange: Double
+    public let additionalWeeklySavingsBefore: Double
+    public let additionalWeeklySavingsAfter: Double
     public let weeklySavingsChange: Double
 
     public var worsened: Bool {
@@ -135,15 +143,22 @@ public extension FinancialInsights {
         profile: FinancialProfile,
         scenario: WhatIfScenario,
         planningHorizon: Date,
+        availableToSpendNow: Double? = nil,
         calendar: Calendar = .current
     ) throws -> WhatIfScenarioAnalysis {
         guard planningHorizon >= profile.asOfDate else { throw FinancialEngineError.invalidDateRange }
 
-        let baseline = try dashboard(profile: profile, through: planningHorizon, calendar: calendar)
+        let rawBaseline = try dashboard(profile: profile, through: planningHorizon, calendar: calendar)
         let beforeGoals = try assessAllGoals(profile: profile, planningHorizon: planningHorizon, calendar: calendar)
         let beforeSmart = try? SmartGoalEngine.evaluate(profile: profile, planningHorizon: planningHorizon, calendar: calendar)
         let applied = try applyWhatIfScenario(profile: profile, scenario: scenario, planningHorizon: planningHorizon, calendar: calendar)
-        let projected = try dashboard(profile: applied.profile, through: planningHorizon, calendar: calendar)
+        let rawProjected = try dashboard(profile: applied.profile, through: planningHorizon, calendar: calendar)
+        let baselineLimit = availableToSpendNow.map { min(max(0, $0), max(0, profile.currentCash)) }
+        let baseline = contextualDashboard(rawBaseline, replacingSafeToSpendWith: baselineLimit)
+        let projectedLimit = baselineLimit.map {
+            max(0, $0 + rawProjected.minimumRecommendedHeadroom - rawBaseline.minimumRecommendedHeadroom)
+        }
+        let projected = contextualDashboard(rawProjected, replacingSafeToSpendWith: projectedLimit)
         let afterGoals = try assessAllGoals(profile: applied.profile, planningHorizon: planningHorizon, calendar: calendar)
         let afterSmart = try? SmartGoalEngine.evaluate(profile: applied.profile, planningHorizon: planningHorizon, calendar: calendar)
 
@@ -163,12 +178,19 @@ public extension FinancialInsights {
             let afterProfile = FinancialScenarioEngine.adjustedProfile(applied.profile, for: financialScenario, calendar: calendar)
             let before = try dashboard(profile: beforeProfile, through: planningHorizon, calendar: calendar)
             let after = try dashboard(profile: afterProfile, through: planningHorizon, calendar: calendar)
+            let scenarioBeforeLimit = baselineLimit.map {
+                max(0, $0 + before.minimumRecommendedHeadroom - rawBaseline.minimumRecommendedHeadroom)
+            } ?? before.safeToSpendNow
+            let scenarioAfterLimit = max(
+                0,
+                scenarioBeforeLimit + after.minimumRecommendedHeadroom - before.minimumRecommendedHeadroom
+            )
             return WhatIfScenarioOutcome(
                 financialScenario: financialScenario,
                 beforeStatus: before.horizonStatus,
                 afterStatus: after.horizonStatus,
-                safeToSpendBefore: before.safeToSpendNow,
-                safeToSpendAfter: after.safeToSpendNow,
+                safeToSpendBefore: scenarioBeforeLimit,
+                safeToSpendAfter: scenarioAfterLimit,
                 minimumRecommendedHeadroomBefore: before.minimumRecommendedHeadroom,
                 minimumRecommendedHeadroomAfter: after.minimumRecommendedHeadroom
             )
@@ -232,6 +254,26 @@ public extension FinancialInsights {
     }
 }
 
+private func contextualDashboard(
+    _ source: FinancialDashboardSnapshot,
+    replacingSafeToSpendWith replacement: Double?
+) -> FinancialDashboardSnapshot {
+    guard let replacement else { return source }
+    return FinancialDashboardSnapshot(
+        asOfDate: source.asOfDate,
+        planningHorizon: source.planningHorizon,
+        currentStatus: source.currentStatus,
+        horizonStatus: source.horizonStatus,
+        safeToSpendNow: max(0, replacement),
+        typicalWeeklySpending: source.typicalWeeklySpending,
+        additionalWeeklyCapacity: source.additionalWeeklyCapacity,
+        recommendedWeeklySpendingLimit: source.recommendedWeeklySpendingLimit,
+        minimumHardHeadroom: source.minimumHardHeadroom,
+        minimumRecommendedHeadroom: source.minimumRecommendedHeadroom,
+        tightestDate: source.tightestDate
+    )
+}
+
 private func advancedOccurrenceDates(
     for change: WhatIfCashFlowChange,
     asOfDate: Date,
@@ -292,8 +334,20 @@ private func advancedSmartGoalImpacts(
             statusBefore: original.status,
             statusAfter: updated.status,
             projectedCompletionDateChangeInDays: days,
+            projectedCompletionDateBefore: original.projectedCompletionDate,
+            projectedCompletionDateAfter: updated.projectedCompletionDate,
+            projectedAmountAtDeadlineBefore: original.projectedAmountAtDeadline,
+            projectedAmountAtDeadlineAfter: updated.projectedAmountAtDeadline,
+            shortfallBefore: original.shortfall,
+            shortfallAfter: updated.shortfall,
             shortfallChange: updated.shortfall - original.shortfall,
-            weeklySavingsChange: updated.requiredWeeklySavings - original.requiredWeeklySavings
+            additionalWeeklySavingsBefore: original.shortfall / Double(max(1, original.daysRemaining)) * 7,
+            additionalWeeklySavingsAfter: updated.shortfall / Double(max(1, updated.daysRemaining)) * 7,
+            weeklySavingsChange: (
+                updated.shortfall / Double(max(1, updated.daysRemaining)) * 7
+            ) - (
+                original.shortfall / Double(max(1, original.daysRemaining)) * 7
+            )
         )
     }
 }
