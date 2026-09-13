@@ -238,7 +238,13 @@ public enum QualitativeProfileUpdater {
             date: event.date,
             source: event.source,
             type: type ?? event.type,
-            confidence: confidence ?? event.confidence
+            confidence: confidence ?? event.confidence,
+            amountRange: event.amountRange,
+            dateWindow: event.dateWindow,
+            recurrenceRule: event.recurrenceRule,
+            allocations: event.allocations,
+            planningSource: event.planningSource,
+            planningStatus: event.planningStatus
         )
     }
 
@@ -255,7 +261,13 @@ public enum QualitativeProfileUpdater {
             essential: essential ?? event.essential,
             committed: committed ?? event.committed,
             reimbursable: event.reimbursable,
-            extraordinary: event.extraordinary
+            extraordinary: event.extraordinary,
+            amountRange: event.amountRange,
+            dateWindow: event.dateWindow,
+            recurrenceRule: event.recurrenceRule,
+            merchantIdentity: event.merchantIdentity,
+            planningSource: event.planningSource,
+            planningStatus: event.planningStatus
         )
     }
 
@@ -362,4 +374,3 @@ public enum QualitativeProfileUpdater {
         abs(lhs.confidence - rhs.confidence) <= 0.000_001
     }
 }
-

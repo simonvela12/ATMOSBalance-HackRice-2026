@@ -41,7 +41,7 @@ final class GoalInsightsTests: XCTestCase {
         XCTAssertTrue(result.includedInBaseline)
         XCTAssertEqual(result.shortfallToHardFloor, 200, accuracy: 0.001)
         XCTAssertEqual(result.shortfallToRecommendedFloor, 300, accuracy: 0.001)
-        XCTAssertEqual(result.tightestDate, date(2026, 10, 1))
+        XCTAssertEqual(result.tightestDate, asOf)
         XCTAssertNil(result.recommendedDate)
     }
 
@@ -127,4 +127,3 @@ final class GoalInsightsTests: XCTestCase {
         XCTAssertEqual(results.map { $0.goal.name }, ["Sooner goal", "Later goal"])
     }
 }
-

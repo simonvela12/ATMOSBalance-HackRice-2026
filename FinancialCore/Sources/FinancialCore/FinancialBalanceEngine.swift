@@ -113,7 +113,7 @@ public enum FinancialBalanceEngine {
             profile: profile,
             on: profile.asOfDate
         )
-        let protectedReserve = maximumHardFloor(
+        let protectedReserve = maximumBaseReserve(
             profile: profile,
             from: profile.asOfDate,
             through: horizonEnd,
@@ -128,12 +128,15 @@ public enum FinancialBalanceEngine {
             profile: profile,
             targetDate: horizonEnd
         )
+        let protectedMandatoryGoals = profile.goals
+            .filter { $0.lifecycleState == .active && $0.priority == .mandatory && $0.remainingAmount > 0 }
+            .reduce(0) { $0 + $1.remainingAmount }
 
         let beforeGoalPlan = liquidAccountBalance
             - protectedReserve
             - buffer
             - committedExpenses
-            - mandatoryGoals
+            - protectedMandatoryGoals
 
         let portfolio = try SmartGoalEngine.evaluate(
             profile: profile,
@@ -222,20 +225,20 @@ public enum FinancialBalanceEngine {
         )
     }
 
-    private static func maximumHardFloor(
+    private static func maximumBaseReserve(
         profile: FinancialProfile,
         from startDate: Date,
         through endDate: Date,
         calendar: Calendar
     ) -> Double {
         guard endDate >= startDate else {
-            return FinancialEngine.hardFloor(profile: profile, on: startDate)
+            return max(FinancialEngine.personalReserve(profile: profile, on: startDate), FinancialEngine.institutionalMinimum(profile: profile, on: startDate))
         }
 
         var date = startDate
         var maximum = 0.0
         while date <= endDate {
-            maximum = max(maximum, FinancialEngine.hardFloor(profile: profile, on: date))
+            maximum = max(maximum, max(FinancialEngine.personalReserve(profile: profile, on: date), FinancialEngine.institutionalMinimum(profile: profile, on: date)))
             guard let next = calendar.date(byAdding: .day, value: 1, to: date) else {
                 break
             }
@@ -244,4 +247,3 @@ public enum FinancialBalanceEngine {
         return maximum
     }
 }
-

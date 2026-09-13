@@ -24,11 +24,32 @@ struct ContentView: View {
     @State private var deletedForecastDays: Set<String> = []
     @State private var excludedOccurrences: Set<String> = []
     @State private var occurrenceNameOverrides: [String: String] = [:]
+    @State private var hasRestoredUserPlan = false
     @AppStorage("safetyBufferMode") private var safetyBufferModeRaw = SafetyBufferMode.automatic.rawValue
     @AppStorage("customSafetyBuffer") private var customSafetyBuffer = 0.0
 
     private var safetyBufferMode: SafetyBufferMode {
         SafetyBufferMode(rawValue: safetyBufferModeRaw) ?? .automatic
+    }
+
+    private var currentUserPlan: UserPlan {
+        UserPlan(
+            goals: goals,
+            entries: addedEntries,
+            deletedForecastDays: deletedForecastDays,
+            excludedOccurrences: excludedOccurrences,
+            occurrenceNameOverrides: occurrenceNameOverrides
+        )
+    }
+
+    private func restoreUserPlan() {
+        let plan = PlanPersistence.load()
+        goals = plan.goals
+        addedEntries = plan.entries
+        deletedForecastDays = plan.deletedForecastDays
+        excludedOccurrences = plan.excludedOccurrences
+        occurrenceNameOverrides = plan.occurrenceNameOverrides
+        hasRestoredUserPlan = true
     }
 
     private var month: MonthForecast {
@@ -157,6 +178,11 @@ struct ContentView: View {
             .scrollIndicators(.hidden)
         }
         .preferredColorScheme(.dark)
+        .task { restoreUserPlan() }
+        .onChange(of: currentUserPlan) { _, plan in
+            guard hasRestoredUserPlan else { return }
+            PlanPersistence.save(plan)
+        }
         .animation(.easeInOut(duration: 0.45), value: selectedMonth)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             whatIfButton
@@ -226,7 +252,7 @@ struct ContentView: View {
                 spendableBalance: max(0, goalPlanning.liquidBalance - (reservedForGoals - goal.saved))
             ) { amount in
                 if let index = goals.firstIndex(where: { $0.id == goal.id }) {
-                    goals[index].saved = min(goals[index].targetAmount, max(0, amount))
+                    goals[index].setAllocatedAmount(amount)
                 }
             }
             .presentationDetents([.large])
@@ -251,9 +277,13 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showingCalendar) {
             CalendarForecastSheet(
-                month: month,
+                initialMonth: selectedMonth,
                 goals: currentGoals,
                 entries: addedEntries,
+                deletedForecastDays: deletedForecastDays,
+                excludedOccurrences: excludedOccurrences,
+                occurrenceNameOverrides: occurrenceNameOverrides,
+                bank: bankContext,
                 onRename: renameEntry,
                 onEdit: editEntry,
                 onDelete: deleteEntry
@@ -901,7 +931,7 @@ private struct BalanceChartCard: View {
                             dash: point.series == .expected ? [6, 5] : []
                         )
                     )
-                    .interpolationMethod(.stepEnd)
+                    .interpolationMethod(point.series == .actual ? .stepEnd : .linear)
 
                     PointMark(
                         x: .value("Date", point.date),
@@ -966,7 +996,7 @@ private struct BalanceChartCard: View {
                 Image(systemName: "circle.fill")
                     .font(.system(size: 6))
                     .foregroundStyle(.white.opacity(0.55))
-                Text("Each point represents a recorded or expected account change.")
+                Text("Expected balance combines the historical trend line with scheduled future changes.")
             }
             .font(.helvetica(.caption2))
             .foregroundStyle(.white.opacity(0.48))
@@ -1256,6 +1286,8 @@ private struct GoalProgressTile: View {
                         .foregroundStyle(.white.opacity(0.5))
                 }
                 .font(.helvetica(.caption2, weight: .semibold))
+
+                WeeklyGoalFundingStatus(goal: goal, recommendedWeekly: insight.weekly)
             }
 
             ProgressView(value: goal.progress)
@@ -1275,7 +1307,7 @@ private struct GoalProgressTile: View {
 
             HStack(spacing: 8) {
                 Button(action: onAllocate) {
-                    Label(goal.saved > 0 ? "Manage" : "Allocate", systemImage: goal.saved > 0 ? "slider.horizontal.3" : "plus.circle.fill")
+                    Label("Allocate", systemImage: "plus.circle.fill")
                         .font(.helvetica(.caption, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.78))
                 }
@@ -1309,6 +1341,27 @@ private struct PriorityBadge: View {
             .padding(.horizontal, 7)
             .padding(.vertical, 4)
             .background(priority.color.opacity(0.12), in: Capsule())
+    }
+}
+
+private struct WeeklyGoalFundingStatus: View {
+    let goal: FinancialGoal
+    let recommendedWeekly: Double
+
+    private var allocated: Double { goal.allocatedThisWeek }
+    private var remaining: Double { max(0, recommendedWeekly - allocated) }
+    private var isComplete: Bool { recommendedWeekly <= 0.005 || remaining <= 0.005 }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: isComplete ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(isComplete ? Color.rainMist : .white.opacity(0.55))
+            Text(isComplete ? "This week funded" : "Allocate (remaining.currencyText) this week")
+                .foregroundStyle(isComplete ? Color.rainMist : .white.opacity(0.68))
+            Spacer(minLength: 0)
+        }
+        .font(.helvetica(.caption2, weight: .semibold))
+        .accessibilityLabel(isComplete ? "Weekly goal funding complete" : "(remaining.currencyText) remains to allocate this week")
     }
 }
 
@@ -1428,7 +1481,7 @@ private struct ExpandedGoalsSheet: View {
                 spendableBalance: max(0, accountBalance - reservedAmount)
             ) { amount in
                 if let index = goals.firstIndex(where: { $0.id == goal.id }) {
-                    goals[index].saved = min(goals[index].targetAmount, max(0, amount))
+                    goals[index].setAllocatedAmount(amount)
                 }
             }
             .presentationDetents([.large])
@@ -1534,11 +1587,13 @@ private struct ExpandedGoalRow: View {
                 }
                 .font(.helvetica(.caption2, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.58))
+
+                WeeklyGoalFundingStatus(goal: goal, recommendedWeekly: insight.weekly)
             }
 
             if let onAllocate {
                 Button(action: onAllocate) {
-                    Label(goal.saved > 0 ? "Manage allocation" : "Allocate money", systemImage: goal.saved > 0 ? "slider.horizontal.3" : "plus.circle.fill")
+                    Label("Allocate money", systemImage: "plus.circle.fill")
                         .font(.helvetica(.caption, weight: .semibold))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 9)
@@ -1719,7 +1774,7 @@ private struct AllocateMoneySheet: View {
 
             ScrollView {
                 VStack(spacing: 18) {
-                    SheetTitle(eyebrow: "MANAGE ALLOCATION", title: goal.name, symbol: goal.symbol)
+                    SheetTitle(eyebrow: "ALLOCATE MONEY", title: goal.name, symbol: goal.symbol)
 
                     HStack(spacing: 8) {
                         PriorityBadge(priority: goal.priority)
@@ -2226,14 +2281,57 @@ private struct ScenarioMetric: View {
 }
 
 private struct CalendarForecastSheet: View {
-    let month: MonthForecast
+    @State private var displayedMonth: ForecastMonth
     let goals: [FinancialGoal]
     let entries: [FinancialEntry]
+    let deletedForecastDays: Set<String>
+    let excludedOccurrences: Set<String>
+    let occurrenceNameOverrides: [String: String]
+    let bank: BankForecastContext
     let onRename: (ForecastEntryTarget, String, OccurrenceScope) -> Void
     let onEdit: (ForecastEntryTarget, FinancialEntry, OccurrenceScope) -> Void
     let onDelete: (ForecastEntryTarget, OccurrenceScope) -> Void
     @State private var selectedDay: ForecastDay?
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 7)
+
+    init(
+        initialMonth: ForecastMonth,
+        goals: [FinancialGoal],
+        entries: [FinancialEntry],
+        deletedForecastDays: Set<String>,
+        excludedOccurrences: Set<String>,
+        occurrenceNameOverrides: [String: String],
+        bank: BankForecastContext,
+        onRename: @escaping (ForecastEntryTarget, String, OccurrenceScope) -> Void,
+        onEdit: @escaping (ForecastEntryTarget, FinancialEntry, OccurrenceScope) -> Void,
+        onDelete: @escaping (ForecastEntryTarget, OccurrenceScope) -> Void
+    ) {
+        _displayedMonth = State(initialValue: initialMonth)
+        self.goals = goals
+        self.entries = entries
+        self.deletedForecastDays = deletedForecastDays
+        self.excludedOccurrences = excludedOccurrences
+        self.occurrenceNameOverrides = occurrenceNameOverrides
+        self.bank = bank
+        self.onRename = onRename
+        self.onEdit = onEdit
+        self.onDelete = onDelete
+    }
+
+    private var month: MonthForecast {
+        MockForecast.data(for: displayedMonth, including: entries, excludingForecastDays: deletedForecastDays, excludingOccurrences: excludedOccurrences, occurrenceNameOverrides: occurrenceNameOverrides, bank: bank)
+    }
+
+    private var monthIndex: Int { ForecastMonth.allCases.firstIndex(of: displayedMonth) ?? 0 }
+    private var canGoBack: Bool { monthIndex > 0 }
+    private var canGoForward: Bool { monthIndex < ForecastMonth.allCases.count - 1 }
+
+    private func moveMonth(by offset: Int) {
+        let index = monthIndex + offset
+        guard ForecastMonth.allCases.indices.contains(index) else { return }
+        selectedDay = nil
+        withAnimation(.easeInOut(duration: 0.25)) { displayedMonth = ForecastMonth.allCases[index] }
+    }
 
     private var leadingSpaces: Int {
         var components = DateComponents()
@@ -2271,7 +2369,26 @@ private struct CalendarForecastSheet: View {
 
             ScrollView {
                 VStack(spacing: 20) {
-                    SheetTitle(eyebrow: "MONTHLY CALENDAR", title: month.month.displayName, symbol: "calendar")
+                    HStack(spacing: 12) {
+                        Button { moveMonth(by: -1) } label: {
+                            Image(systemName: "chevron.left").frame(width: 40, height: 40).background(.white.opacity(0.09), in: Circle())
+                        }
+                        .disabled(!canGoBack)
+                        .opacity(canGoBack ? 1 : 0.3)
+
+                        VStack(spacing: 3) {
+                            Text("MONTHLY CALENDAR").font(.helvetica(.caption, weight: .bold)).tracking(1.3).foregroundStyle(.white.opacity(0.62))
+                            Text(month.month.displayName).font(.helvetica(.title2, weight: .bold))
+                        }
+                        .frame(maxWidth: .infinity)
+
+                        Button { moveMonth(by: 1) } label: {
+                            Image(systemName: "chevron.right").frame(width: 40, height: 40).background(.white.opacity(0.09), in: Circle())
+                        }
+                        .disabled(!canGoForward)
+                        .opacity(canGoForward ? 1 : 0.3)
+                    }
+                    .buttonStyle(.plain)
 
                     LazyVGrid(columns: columns, spacing: 8) {
                         ForEach(["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"], id: \.self) { weekday in
@@ -2969,7 +3086,7 @@ private struct EntryCard<Content: View>: View {
     }
 }
 
-private enum EntryKind: String, CaseIterable, Identifiable {
+private enum EntryKind: String, CaseIterable, Identifiable, Codable {
     case payment
     case income
 
@@ -2978,7 +3095,7 @@ private enum EntryKind: String, CaseIterable, Identifiable {
     var symbol: String { self == .payment ? "arrow.up.right" : "arrow.down.left" }
 }
 
-private enum EntrySchedule: String, CaseIterable, Identifiable {
+private enum EntrySchedule: String, CaseIterable, Identifiable, Codable {
     case oneTime
     case recurring
 
@@ -2986,7 +3103,7 @@ private enum EntrySchedule: String, CaseIterable, Identifiable {
     var title: String { self == .oneTime ? "One-time" : "Recurring" }
 }
 
-private enum RepeatUnit: String, CaseIterable, Identifiable {
+private enum RepeatUnit: String, CaseIterable, Identifiable, Codable {
     case day
     case week
     case month
@@ -2997,7 +3114,7 @@ private enum RepeatUnit: String, CaseIterable, Identifiable {
     var plural: String { "\(rawValue.capitalized)s" }
 }
 
-private enum RepeatEnding: String, CaseIterable, Identifiable {
+private enum RepeatEnding: String, CaseIterable, Identifiable, Codable {
     case never
     case onDate
     case afterOccurrences
@@ -3013,7 +3130,7 @@ private enum RepeatEnding: String, CaseIterable, Identifiable {
     }
 }
 
-private enum GoalPriority: String, CaseIterable, Identifiable {
+private enum GoalPriority: String, CaseIterable, Identifiable, Codable {
     case essential
     case important
     case flexible
@@ -3050,7 +3167,7 @@ private enum GoalPriority: String, CaseIterable, Identifiable {
     }
 }
 
-private enum GoalFlexibility: String, CaseIterable, Identifiable {
+private enum GoalFlexibility: String, CaseIterable, Identifiable, Codable {
     case fixed
     case balanced
     case flexible
@@ -3096,7 +3213,47 @@ private enum GoalListTab: String, CaseIterable, Identifiable {
     var title: String { rawValue.capitalized }
 }
 
-private struct FinancialGoal: Identifiable {
+/// The user's manual plan is stored separately from the bank cache. Bank refreshes
+/// can therefore update balances and transactions without erasing goals, recurring
+/// entries, edits, or future-occurrence exclusions.
+private struct UserPlan: Codable, Equatable {
+    var goals: [FinancialGoal] = []
+    var entries: [FinancialEntry] = []
+    var deletedForecastDays: Set<String> = []
+    var excludedOccurrences: Set<String> = []
+    var occurrenceNameOverrides: [String: String] = [:]
+}
+
+private enum PlanPersistence {
+    private static var fileURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Finanzas2026", isDirectory: true)
+            .appendingPathComponent("user-plan.json")
+    }
+
+    static func load() -> UserPlan {
+        guard let data = try? Data(contentsOf: fileURL) else { return UserPlan() }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return (try? decoder.decode(UserPlan.self, from: data)) ?? UserPlan()
+    }
+
+    static func save(_ plan: UserPlan) {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? encoder.encode(plan) else { return }
+        try? FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: fileURL, options: .atomic)
+    }
+}
+
+private struct GoalAllocationRecord: Codable, Equatable {
+    let date: Date
+    let amount: Double
+}
+
+private struct FinancialGoal: Identifiable, Codable, Equatable {
     let id: UUID
     var name: String
     let targetAmount: Double
@@ -3107,6 +3264,7 @@ private struct FinancialGoal: Identifiable {
     let flexibility: GoalFlexibility
     var isPaused: Bool
     var isCompleted: Bool
+    var allocationHistory: [GoalAllocationRecord]? = nil
 
     var progress: Double {
         guard targetAmount > 0 else { return 0 }
@@ -3114,6 +3272,24 @@ private struct FinancialGoal: Identifiable {
     }
 
     var remaining: Double { max(0, targetAmount - saved) }
+
+    var allocatedThisWeek: Double {
+        let calendar = Calendar.current
+        guard let interval = calendar.dateInterval(of: .weekOfYear, for: Date()) else { return 0 }
+        return max(0, (allocationHistory ?? [])
+            .filter { interval.contains($0.date) }
+            .reduce(0) { $0 + $1.amount })
+    }
+
+    mutating func setAllocatedAmount(_ amount: Double, on date: Date = Date()) {
+        let bounded = min(targetAmount, max(0, amount)).roundedToCents
+        let change = (bounded - saved).roundedToCents
+        saved = bounded
+        guard abs(change) > 0.005 else { return }
+        var history = allocationHistory ?? []
+        history.append(GoalAllocationRecord(date: date, amount: change))
+        allocationHistory = history
+    }
 
 }
 
@@ -3350,7 +3526,7 @@ private enum GoalAllocation {
     }
 }
 
-private struct FinancialEntry: Identifiable {
+private struct FinancialEntry: Identifiable, Codable, Equatable {
     let id: UUID
     var name: String
     let kind: EntryKind
@@ -3920,31 +4096,55 @@ private enum MockForecast {
             )
         }
 
-        let entryPoints = occurrences.compactMap { occurrence -> BalancePoint? in
-            guard occurrence.date >= makeDate(year: 2026, month: 5, day: 1) else { return nil }
-            let baseBalance = basePoints
-                .filter { $0.date <= occurrence.date }
-                .last?.balance ?? basePoints.first?.balance ?? bank.currentBalance
-            let adjustment = occurrences
-                .filter { $0.date <= occurrence.date }
-                .reduce(0) { $0 + $1.entry.signedAmount }
-                + deletedAdjustments
-                    .filter { $0.date <= occurrence.date }
-                    .reduce(0) { $0 + $1.amount }
+        guard bank.hasData || !entries.isEmpty else { return [] }
+        let currentBalance = adjustedBasePoints
+            .filter { $0.date <= todayDate }
+            .last?.balance ?? bank.currentBalance
+        let slope = linearDailyTrend(points: adjustedBasePoints.filter { $0.date <= todayDate })
+        let futureOccurrences = occurrences.filter { $0.date > todayDate }
+        let futureDeletions = deletedAdjustments.filter { $0.date > todayDate }
 
+        var forecastDates: Set<Date> = [todayDate, Self.horizon]
+        futureOccurrences.forEach { forecastDates.insert($0.date) }
+        var sampleDate = Calendar(identifier: .gregorian).date(byAdding: .day, value: 14, to: todayDate) ?? Self.horizon
+        while sampleDate < Self.horizon {
+            forecastDates.insert(sampleDate)
+            guard let next = Calendar(identifier: .gregorian).date(byAdding: .day, value: 14, to: sampleDate) else { break }
+            sampleDate = next
+        }
+
+        let expectedPoints = forecastDates.sorted().map { date -> BalancePoint in
+            let days = max(0, date.timeIntervalSince(todayDate) / 86_400)
+            let plannedMovement = futureOccurrences
+                .filter { $0.date <= date }
+                .reduce(0) { $0 + $1.entry.signedAmount }
+            let restoredMovement = futureDeletions
+                .filter { $0.date <= date }
+                .reduce(0) { $0 + $1.amount }
             return BalancePoint(
-                id: "entry-\(occurrence.entry.id.uuidString)-\(occurrence.date.timeIntervalSince1970)",
-                date: occurrence.date,
-                balance: baseBalance + Double(adjustment),
-                series: occurrence.date <= todayDate ? .actual : .expected,
-                isAnchor: true
+                id: "trend-\(Int(date.timeIntervalSince1970))",
+                date: date,
+                balance: currentBalance + slope * days + plannedMovement + restoredMovement,
+                series: .expected,
+                isAnchor: Calendar.current.isDate(date, inSameDayAs: todayDate) || futureOccurrences.contains { Calendar.current.isDate($0.date, inSameDayAs: date) }
             )
         }
 
-        return (adjustedBasePoints + entryPoints).sorted {
+        return (adjustedBasePoints + expectedPoints).sorted {
             if $0.date == $1.date { return $0.series.rawValue < $1.series.rawValue }
             return $0.date < $1.date
         }
+    }
+
+    private static func linearDailyTrend(points: [BalancePoint]) -> Double {
+        guard points.count >= 2,
+              let origin = points.map(\.date).min() else { return 0 }
+        let samples = points.map { (x: $0.date.timeIntervalSince(origin) / 86_400, y: $0.balance) }
+        let meanX = samples.reduce(0) { $0 + $1.x } / Double(samples.count)
+        let meanY = samples.reduce(0) { $0 + $1.y } / Double(samples.count)
+        let denominator = samples.reduce(0) { $0 + pow($1.x - meanX, 2) }
+        guard denominator > 0.000_001 else { return 0 }
+        return samples.reduce(0) { $0 + ($1.x - meanX) * ($1.y - meanY) } / denominator
     }
 
     static func data(

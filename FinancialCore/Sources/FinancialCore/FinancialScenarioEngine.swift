@@ -64,12 +64,20 @@ public enum FinancialScenarioEngine {
 
             return IncomeEvent(
                 id: event.id,
-                amount: event.amount,
-                date: event.date,
+                amount: event.scenarioNominalAmount(for: scenario),
+                date: event.scenarioDate(for: scenario),
                 source: event.source,
                 type: event.type,
-                confidence: confidence
+                confidence: confidence,
+                recurrenceRule: event.recurrenceRule,
+                allocations: event.allocations,
+                planningSource: event.planningSource,
+                planningStatus: event.planningStatus
             )
+        }
+
+        adjusted.expenseEvents = profile.expenseEvents.map { event in
+            ExpenseEvent(id: event.id, amount: event.scenarioAmount(for: scenario), date: event.scenarioDate(for: scenario), category: event.category, essential: event.essential, committed: event.committed, reimbursable: event.reimbursable, extraordinary: event.extraordinary, recurrenceRule: event.recurrenceRule, merchantIdentity: event.merchantIdentity, planningSource: event.planningSource, planningStatus: event.planningStatus)
         }
 
         let eligible = FinancialEngine.eligibleWeeklySpendingValues(
@@ -182,4 +190,3 @@ public enum FinancialScenarioEngine {
         }
     }
 }
-

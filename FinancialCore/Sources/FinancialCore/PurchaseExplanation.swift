@@ -3,6 +3,7 @@ import Foundation
 public enum PurchaseDecisionReason: String, Codable, Sendable {
     case preservesRecommendedBuffer
     case usesSafetyBuffer
+    case violatesProtectedGoal
     case violatesPersonalReserve
     case violatesInstitutionalMinimum
     case violatesMultipleHardConstraints
@@ -47,6 +48,8 @@ public extension FinancialInsights {
         )
         let cashAfter = baseline.projectedCash - assessment.purchaseAmount
 
+        let hasProtectedGoalConstraint = FinancialEngine.protectedMandatoryGoals(profile: profile, on: limitingDate) > 0.005 || FinancialEngine.mandatoryGoalPayments(profile: profile, targetDate: limitingDate) > 0.005
+
         let reason: PurchaseDecisionReason
         switch assessment.status {
         case .safe:
@@ -58,14 +61,17 @@ public extension FinancialInsights {
         case .notSafe:
             let violatesPersonal = baseline.personalReserve > 0 && cashAfter < baseline.personalReserve
             let violatesInstitutional = baseline.institutionalMinimum > 0 && cashAfter < baseline.institutionalMinimum
+            let hardConstraintCount = [hasProtectedGoalConstraint, violatesPersonal, violatesInstitutional].filter { $0 }.count
 
-            if violatesPersonal && violatesInstitutional {
+            if hardConstraintCount > 1 {
                 reason = .violatesMultipleHardConstraints
+            } else if hasProtectedGoalConstraint {
+                reason = .violatesProtectedGoal
             } else if violatesPersonal {
                 reason = .violatesPersonalReserve
             } else if violatesInstitutional {
                 reason = .violatesInstitutionalMinimum
-            } else if baseline.personalReserve >= baseline.institutionalMinimum {
+            } else if baseline.personalReserve > 0 {
                 reason = .violatesPersonalReserve
             } else {
                 reason = .violatesInstitutionalMinimum
@@ -111,4 +117,3 @@ public extension FinancialInsights {
         return (assessment, explanation)
     }
 }
-

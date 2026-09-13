@@ -62,11 +62,26 @@ public enum FinancialEngine {
             .reduce(0) { $0 + max(0, $1.minimumBalance) }
     }
 
+    public static func protectedMandatoryGoals(profile: FinancialProfile, on date: Date) -> Double {
+        profile.goals
+            .filter { $0.lifecycleState == .active && $0.priority == .mandatory && $0.remainingAmount > 0 && $0.deadline > date }
+            .reduce(0) { $0 + $1.remainingAmount }
+    }
+
     public static func hardFloor(profile: FinancialProfile, on date: Date) -> Double {
-        max(
+        let baseFloor = max(
             personalReserve(profile: profile, on: date),
             institutionalMinimum(profile: profile, on: date)
         )
+        return baseFloor + protectedMandatoryGoals(profile: profile, on: date)
+    }
+
+    public static func protectedCashToday(profile: FinancialProfile) -> Double {
+        hardFloor(profile: profile, on: profile.asOfDate) + mandatoryGoalPayments(profile: profile, targetDate: profile.asOfDate)
+    }
+
+    public static func liquidCashToday(profile: FinancialProfile) -> Double {
+        max(0, profile.currentCash - protectedCashToday(profile: profile))
     }
 
     public static func expectedIncome(profile: FinancialProfile, targetDate: Date) -> Double {
@@ -91,6 +106,7 @@ public enum FinancialEngine {
     public static func mandatoryGoalPayments(profile: FinancialProfile, targetDate: Date) -> Double {
         profile.goals
             .filter {
+                $0.lifecycleState == .active &&
                 $0.priority == .mandatory &&
                 $0.remainingAmount > 0 &&
                 $0.deadline <= targetDate
@@ -138,7 +154,7 @@ public enum FinancialEngine {
 
         let personal = personalReserve(profile: profile, on: targetDate)
         let institutional = institutionalMinimum(profile: profile, on: targetDate)
-        let floor = max(personal, institutional)
+        let floor = hardFloor(profile: profile, on: targetDate)
         let buffer = safetyBuffer(profile: profile, calendar: calendar)
         let hardHeadroom = cash - floor
         let recommendedHeadroom = hardHeadroom - buffer
@@ -345,4 +361,3 @@ public enum FinancialEngine {
         return FlexibleGoalAssessment(goal: goal, purchaseAssessment: assessment)
     }
 }
-
