@@ -98,7 +98,8 @@ struct ContentView: View {
                 if entry.kind == .income {
                     income.append(
                         IncomeEvent(amount: Double(entry.amount), date: day,
-                                    source: name, type: .oneTime, confidence: 1)
+                                    source: name, type: .oneTime, confidence: 1,
+                                    reliability: entry.effectiveReliability)
                     )
                 } else {
                     expenses.append(
@@ -2658,6 +2659,7 @@ private struct AddEntrySheet: View {
     let onSave: (FinancialEntry) -> Void
 
     @State private var entryKind = EntryKind.payment
+    @State private var entryReliability = IncomeReliability.reliable
     @State private var entryName = ""
     @State private var amountText = ""
     @State private var entryDate = MockForecast.todayDate
@@ -2734,6 +2736,21 @@ private struct AddEntrySheet: View {
                             }
                         }
                         .pickerStyle(.segmented)
+                    }
+
+                    if entryKind == .income {
+                        EntryCard(title: "HOW SURE ARE YOU?") {
+                            Picker("Reliability", selection: $entryReliability) {
+                                Text("Reliable").tag(IncomeReliability.reliable)
+                                Text("Likely").tag(IncomeReliability.expected)
+                                Text("Uncertain").tag(IncomeReliability.uncertain)
+                            }
+                            .pickerStyle(.segmented)
+                            Text("Your safe-to-spend figure is cautious: it leans on money that is certain and discounts money that might not arrive.")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.55))
+                                .padding(.top, 6)
+                        }
                     }
 
                     EntryCard(title: "ENTRY NAME") {
@@ -2824,7 +2841,8 @@ private struct AddEntrySheet: View {
                             repeatUnit: repeatUnit,
                             repeatEnding: repeatEnding,
                             occurrenceCount: occurrenceCount,
-                            endDate: endDate
+                            endDate: endDate,
+                            reliability: entryKind == .income ? entryReliability : nil
                         )
                         onSave(entry)
                         dismiss()
@@ -3157,6 +3175,11 @@ private struct FinancialEntry: Identifiable, Codable, Equatable {
     let repeatEnding: RepeatEnding
     let occurrenceCount: Int
     let endDate: Date
+    /// How much of this money the plan may count on. Optional so entries saved before
+    /// reliability existed keep decoding, and only meaningful for income.
+    let reliability: IncomeReliability?
+
+    var effectiveReliability: IncomeReliability { reliability ?? .reliable }
 
     var signedAmount: Int {
         kind == .income ? amount : -amount
