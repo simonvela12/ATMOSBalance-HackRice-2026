@@ -10,6 +10,7 @@ struct AdvancedWhatIfSheet: View {
     @State private var errorMessage: String?
     @State private var isAnalyzing = false
     @State private var apiKey = GeminiSettings.apiKey ?? ""
+    @State private var hasGeminiKey = GeminiSettings.apiKey != nil
 
     private static let money = FloatingPointFormatStyle<Double>.Currency(code: "USD")
         .precision(.fractionLength(0))
@@ -52,7 +53,7 @@ struct AdvancedWhatIfSheet: View {
                     header
                     scenarioComposer
 
-                    if GeminiSettings.apiKey == nil {
+                    if !hasGeminiKey {
                         keyCard
                     }
 
@@ -172,6 +173,7 @@ struct AdvancedWhatIfSheet: View {
                 .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
             Button("Save key") {
                 GeminiSettings.apiKey = apiKey
+                hasGeminiKey = GeminiSettings.apiKey != nil
             }
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(Color(red: 1.00, green: 0.83, blue: 0.35))
@@ -350,7 +352,7 @@ struct AdvancedWhatIfSheet: View {
     }
 
     private var canAnalyze: Bool {
-        profile != nil && GeminiSettings.apiKey != nil && !scenarioText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isAnalyzing
+        profile != nil && hasGeminiKey && !scenarioText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isAnalyzing
     }
 
     private func analyze() {
