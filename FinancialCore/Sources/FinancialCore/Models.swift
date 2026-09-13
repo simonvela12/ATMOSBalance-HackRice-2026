@@ -324,7 +324,7 @@ public struct Goal: Codable, Identifiable, Sendable {
         amountAlreadyPaid: Double = 0,
         deadline: Date,
         priority: GoalPriority,
-        flexibility: GoalFlexibility = .medium,
+        flexibility: GoalFlexibility = .maxDelay(days: 30),
         lifecycleState: GoalLifecycleState = .active
     ) {
         self.id = id
@@ -335,6 +335,16 @@ public struct Goal: Codable, Identifiable, Sendable {
         self.priority = priority
         self.flexibility = flexibility
         self.lifecycleState = lifecycleState
+    }
+
+    /// A goal the user never gave a flexibility for: must-happen dates do not move,
+    /// nice-to-have ones move freely, and everything else gets a month of slack.
+    public static func defaultFlexibility(for priority: GoalPriority) -> GoalFlexibility {
+        switch priority {
+        case .mandatory: return .fixed
+        case .flexible: return .openEnded
+        case .high, .medium, .low: return .maxDelay(days: 30)
+        }
     }
 
     public var remainingAmount: Double {
@@ -379,7 +389,7 @@ public struct Goal: Codable, Identifiable, Sendable {
         deadline = try container.decode(Date.self, forKey: .deadline)
         priority = try container.decodeIfPresent(GoalPriority.self, forKey: .priority) ?? .medium
         flexibility = try container.decodeIfPresent(GoalFlexibility.self, forKey: .flexibility) ??
-            (priority == .flexible ? .high : priority == .mandatory ? .low : .medium)
+            Goal.defaultFlexibility(for: priority)
         lifecycleState = try container.decodeIfPresent(GoalLifecycleState.self, forKey: .lifecycleState) ?? .active
     }
 }
