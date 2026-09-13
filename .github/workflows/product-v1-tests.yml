@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - product-v1.4-clean-integration
+      - what-if
   workflow_dispatch:
 
 concurrency:
