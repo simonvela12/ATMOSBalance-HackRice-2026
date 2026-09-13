@@ -31,6 +31,8 @@ public struct FinancialDashboardSnapshot: Sendable {
     public let planningHorizon: Date
     public let currentStatus: FinancialHealthStatus
     public let horizonStatus: FinancialHealthStatus
+    /// The conservative answer from `SafeToSpendEngine`. It is the same figure the
+    /// rest of the product shows, not a second opinion computed here.
     public let safeToSpendNow: Double
     public let typicalWeeklySpending: Double
     public let additionalWeeklyCapacity: Double
@@ -187,12 +189,12 @@ public enum FinancialInsights {
             through: planningHorizon,
             calendar: calendar
         )
-        let safeNow = try FinancialEngine.safeToSpend(
+        let safeNow = try SafeToSpendEngine.evaluate(
             profile: profile,
-            from: profile.asOfDate,
-            through: planningHorizon,
+            scenario: .conservative,
+            planningHorizon: planningHorizon,
             calendar: calendar
-        )
+        ).amount
         let weekly = try weeklyBudgetRecommendation(
             profile: profile,
             from: profile.asOfDate,

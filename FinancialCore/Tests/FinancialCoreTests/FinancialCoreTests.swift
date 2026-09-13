@@ -74,7 +74,7 @@ final class FinancialCoreTests: XCTestCase {
             targetDate: date(2026, 11, 30),
             calendar: calendar
         )
-        let safeNow = try FinancialEngine.safeToSpend(
+        let safeNow = try FinancialEngine.minimumSpendableHeadroom(
             profile: profile,
             from: asOf,
             through: date(2026, 11, 30),

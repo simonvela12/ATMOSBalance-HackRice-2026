@@ -50,6 +50,9 @@ public struct GoalPortfolioHealth: Sendable {
     public let highestRiskGoalID: UUID?
     public let priorityGoalID: UUID?
     public let committedFutureCash: Double
+    /// The conservative answer from `SafeToSpendEngine`. Goal funding below is this
+    /// engine's own view of how capacity spreads across goals; the spendable figure is
+    /// not recomputed here, so the two can never disagree.
     public let safeToSpendToday: Double
     public let requiredToSaveDaily: Double
     public let requiredToSaveWeekly: Double
@@ -133,23 +136,14 @@ public enum SmartGoalEngine {
         let protected = active.filter { $0.allocatedFutureCash > 0.005 }
         let maxDeadline = max(active.map { $0.goal.deadline }.max() ?? horizon, profile.asOfDate)
 
-        var goalAwareProfile = fundingProfile
-        goalAwareProfile.goals = protected.map { item in
-            Goal(
-                id: item.goal.id,
-                name: item.goal.name,
-                targetAmount: item.allocatedFutureCash,
-                deadline: max(item.goal.deadline, profile.asOfDate),
-                priority: .mandatory,
-                flexibility: item.goal.flexibility
-            )
-        }
-        let safeToSpend = try FinancialEngine.safeToSpend(
-            profile: goalAwareProfile,
-            from: profile.asOfDate,
-            through: maxDeadline,
+        // Affordability is decided in one place. This engine still explains how goals
+        // compete for funding, but it does not produce a second spendable figure.
+        let safeToSpend = try SafeToSpendEngine.evaluate(
+            profile: profile,
+            scenario: .conservative,
+            planningHorizon: maxDeadline,
             calendar: calendar
-        )
+        ).amount
 
         let priorityGoal = ordered.first { $0.lifecycleState == .active && !$0.isCompleted }
         let riskGoal = failing.max {

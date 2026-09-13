@@ -325,7 +325,13 @@ public enum FinancialEngine {
         )
     }
 
-    public static func safeToSpend(
+    /// The most that can be spent at `startDate` without breaking the recommended
+    /// floor on any day of the window.
+    ///
+    /// This is a primitive, not the product's answer. It knows nothing about goal
+    /// rescheduling, scenarios or the user's runway. Everything the user is shown comes
+    /// from `SafeToSpendEngine`, which is the one place affordability is decided.
+    public static func minimumSpendableHeadroom(
         profile: FinancialProfile,
         from startDate: Date,
         through endDate: Date,

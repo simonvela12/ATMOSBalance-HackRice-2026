@@ -249,9 +249,13 @@ public enum SafeToSpendEngine {
 
     // MARK: - Entry points
 
+    /// - Parameter planningHorizon: a date the plan must stay viable through, for
+    ///   callers that already have a window in mind. The engine still extends past it
+    ///   when a goal or the user's runway falls later; it never simulates less.
     public static func evaluate(
         profile: FinancialProfile,
         scenario: FinancialScenario = .conservative,
+        planningHorizon: Date? = nil,
         calendar: Calendar = .current
     ) throws -> SafeToSpendResult {
         let adjusted = FinancialScenarioEngine.adjustedProfile(
@@ -263,6 +267,7 @@ public enum SafeToSpendEngine {
             base: adjusted,
             originalProfile: profile,
             scenario: scenario,
+            requestedHorizon: planningHorizon,
             calendar: calendar
         )
     }
@@ -271,12 +276,28 @@ public enum SafeToSpendEngine {
     /// duplicated: only the assumptions differ.
     public static func evaluateAllScenarios(
         profile: FinancialProfile,
+        planningHorizon: Date? = nil,
         calendar: Calendar = .current
     ) throws -> ScenarioSafeToSpend {
         ScenarioSafeToSpend(
-            conservative: try evaluate(profile: profile, scenario: .conservative, calendar: calendar),
-            expected: try evaluate(profile: profile, scenario: .expected, calendar: calendar),
-            optimistic: try evaluate(profile: profile, scenario: .optimistic, calendar: calendar)
+            conservative: try evaluate(
+                profile: profile,
+                scenario: .conservative,
+                planningHorizon: planningHorizon,
+                calendar: calendar
+            ),
+            expected: try evaluate(
+                profile: profile,
+                scenario: .expected,
+                planningHorizon: planningHorizon,
+                calendar: calendar
+            ),
+            optimistic: try evaluate(
+                profile: profile,
+                scenario: .optimistic,
+                planningHorizon: planningHorizon,
+                calendar: calendar
+            )
         )
     }
 
@@ -302,6 +323,7 @@ public enum SafeToSpendEngine {
         base: FinancialProfile,
         originalProfile: FinancialProfile,
         scenario: FinancialScenario,
+        requestedHorizon: Date?,
         calendar: Calendar
     ) throws -> SafeToSpendResult {
         let asOf = base.asOfDate
@@ -322,6 +344,9 @@ public enum SafeToSpendEngine {
 
         func horizon(for schedule: [UUID: Date]) -> Date {
             var value = FinancialEngine.defaultPlanningHorizon(profile: base, calendar: calendar)
+            if let requestedHorizon {
+                value = max(value, requestedHorizon)
+            }
             for date in schedule.values {
                 value = max(value, date)
             }

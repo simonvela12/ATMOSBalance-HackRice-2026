@@ -64,7 +64,7 @@ final class ReimbursementLiquidityPathTests: XCTestCase {
             through: date(20),
             calendar: calendar
         )
-        let safeToSpend = try FinancialEngine.safeToSpend(
+        let safeToSpend = try FinancialEngine.minimumSpendableHeadroom(
             profile: profile,
             from: date(12),
             through: date(20),
