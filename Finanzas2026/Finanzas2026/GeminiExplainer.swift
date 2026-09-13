@@ -109,7 +109,6 @@ struct WhatIfVerdict {
         let projected = analysis.projected
         var lines: [String] = [
             "Scenario: \(analysis.scenario.title)",
-            "Current cash: \(Self.money.format(analysis.baseline.safeToSpendNow + max(0, analysis.baseline.minimumRecommendedHeadroom - analysis.baseline.safeToSpendNow)))",
             "Baseline financial health: \(baseline.horizonStatus.rawValue)",
             "Financial health after scenario: \(projected.horizonStatus.rawValue)",
             "Safe to spend before: \(Self.money.format(baseline.safeToSpendNow))",
