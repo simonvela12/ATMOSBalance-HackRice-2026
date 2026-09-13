@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import FinanceCore
 import FinancialCore
 
 @main
@@ -126,8 +127,8 @@ private enum WhatIfProfileBuilder {
                     id: $0.id,
                     remaining: Double(max(0, $0.targetAmount - $0.saved)),
                     deadline: $0.targetDate,
-                    priority: $0.mustHappen ? .mandatory : $0.priority,
-                    flexibility: $0.flexibility
+                    priority: $0.mustHappen ? .mandatory : $0.effectivePriority,
+                    flexibility: $0.effectiveFlexibility
                 )
             }
         )
@@ -142,9 +143,9 @@ private enum WhatIfProfileBuilder {
                     Double(goal.saved) + (allocation[goal.id] ?? 0)
                 ),
                 deadline: goal.targetDate,
-                priority: goal.mustHappen ? .mandatory : goal.priority,
-                flexibility: goal.flexibility,
-                lifecycleState: goal.lifecycleState
+                priority: goal.mustHappen ? .mandatory : goal.effectivePriority,
+                flexibility: goal.effectiveFlexibility,
+                lifecycleState: goal.effectiveLifecycleState
             )
         }
 
@@ -249,15 +250,7 @@ private struct GoalSnapshot: Decodable {
     var mustHappen: Bool { isMandatory ?? false }
     var effectivePriority: GoalPriority { priority ?? (mustHappen ? .high : .medium) }
     var effectiveFlexibility: GoalFlexibility { flexibility ?? (mustHappen ? .low : .medium) }
-
-    var priority: GoalPriority { effectivePriority }
-    var flexibility: GoalFlexibility { effectiveFlexibility }
-    var lifecycleState: GoalLifecycleState { self.lifecycleStateValue }
-    private var lifecycleStateValue: GoalLifecycleState { lifecycleState ?? .active }
-
-    private enum CodingKeys: String, CodingKey {
-        case id, name, targetAmount, saved, targetDate, isMandatory, priority, flexibility, lifecycleState
-    }
+    var effectiveLifecycleState: GoalLifecycleState { lifecycleState ?? .active }
 }
 
 private struct EntrySnapshot: Decodable {
