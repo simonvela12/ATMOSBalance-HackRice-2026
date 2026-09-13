@@ -339,7 +339,7 @@ public enum SmartGoalEngine {
         }
 
         let recommendation: Date?
-        if shortfall > 0.005 && goal.flexibility != .low {
+        if shortfall > 0.005 && goal.flexibility.allowsDelay {
             recommendation = completion ?? estimatedAlternativeDate(
                 remaining: remaining,
                 available: available,
@@ -430,9 +430,9 @@ public enum SmartGoalEngine {
     private static func delaySuitability(_ health: GoalHealth) -> Double {
         let flexibility: Double
         switch health.goal.flexibility {
-        case .high: flexibility = 3
-        case .medium: flexibility = 2
-        case .low: flexibility = 0
+        case .openEnded: flexibility = 3
+        case .maxDelay(let days): flexibility = days >= 60 ? 2.5 : 2
+        case .fixed: flexibility = 0
         }
         return flexibility * 10 - health.goal.priority.weight + health.shortfall / max(1, health.goal.targetAmount)
     }

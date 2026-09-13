@@ -45,30 +45,23 @@ public enum FinancialScenarioEngine {
     ) -> FinancialProfile {
         var adjusted = profile
 
+        // Reliability, not the raw income type, decides how much of a future payment a
+        // scenario may count on. The discount is folded into the amount once here so no
+        // downstream consumer discounts the same money a second time.
         adjusted.incomeEvents = profile.incomeEvents.map { event in
-            let confidence: Double
-
-            switch event.type {
-            case .recurring, .oneTime:
-                confidence = event.confidence
-            case .irregular:
-                switch scenario {
-                case .conservative:
-                    confidence = 0
-                case .expected:
-                    confidence = event.confidence
-                case .optimistic:
-                    confidence = 1
-                }
-            }
+            let weight = event.reliability.multiplier(
+                for: scenario,
+                confidence: event.confidence
+            )
 
             return IncomeEvent(
                 id: event.id,
-                amount: event.scenarioNominalAmount(for: scenario),
+                amount: event.scenarioNominalAmount(for: scenario) * weight,
                 date: event.scenarioDate(for: scenario),
                 source: event.source,
                 type: event.type,
-                confidence: confidence,
+                confidence: 1,
+                reliability: .reliable,
                 recurrenceRule: event.recurrenceRule,
                 allocations: event.allocations,
                 planningSource: event.planningSource,

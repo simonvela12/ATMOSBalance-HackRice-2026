@@ -62,9 +62,13 @@ public enum FinancialEngine {
             .reduce(0) { $0 + max(0, $1.minimumBalance) }
     }
 
-    /// Cash that belongs to active must-happen goals and therefore is not available
-    /// for discretionary spending yet. A goal stays protected until its deadline;
-    /// on the deadline it becomes a mandatory payment instead, avoiding double count.
+    /// The remaining cost of active must-happen goals whose deadline is still ahead.
+    ///
+    /// This is a *descriptive* figure used to explain results. It is deliberately not
+    /// part of the hard floor: a goal is a requirement on a future date, not money that
+    /// has to sit untouched from today. Whether today's balance is actually committed to
+    /// it depends on the cash-flow path between now and the deadline, which
+    /// `minimumHeadroom` works out.
     public static func protectedMandatoryGoals(profile: FinancialProfile, on date: Date) -> Double {
         profile.goals
             .filter {
@@ -76,30 +80,104 @@ public enum FinancialEngine {
             .reduce(0) { $0 + $1.remainingAmount }
     }
 
-    /// The amount that must remain untouched on a date. Personal/institutional
-    /// minimums share the same base floor, while future must-happen goals are
-    /// additional commitments with their own deadlines.
+    /// The amount that must remain untouched on a date, i.e. the personal and
+    /// institutional minimums. Goals are not added here; they enter the plan as dated
+    /// obligations on their own deadline instead.
     public static func hardFloor(profile: FinancialProfile, on date: Date) -> Double {
-        let baseFloor = max(
+        max(
             personalReserve(profile: profile, on: date),
             institutionalMinimum(profile: profile, on: date)
         )
-        return baseFloor + protectedMandatoryGoals(profile: profile, on: date)
     }
 
-    /// Everything in today's account balance that is unavailable for discretionary
-    /// spending: the current hard floor plus mandatory goals already due today.
-    public static func protectedCashToday(profile: FinancialProfile) -> Double {
-        hardFloor(profile: profile, on: profile.asOfDate)
-            + mandatoryGoalPayments(profile: profile, targetDate: profile.asOfDate)
+    /// Upper bound on how far ahead the engine will simulate. Keeps a stray far-future
+    /// date from turning a daily scan into a multi-decade loop.
+    public static let maximumPlanningHorizonInDays = 730
+
+    /// The last date on which a dated obligation still has to be honoured. A caller may
+    /// ask about a shorter window, but money committed to a goal beyond that window must
+    /// not look spendable, so the scan always reaches at least this far.
+    public static func obligationHorizon(profile: FinancialProfile) -> Date {
+        profile.goals
+            .filter {
+                $0.lifecycleState == .active &&
+                $0.priority == .mandatory &&
+                $0.remainingAmount > 0
+            }
+            .map(\.deadline)
+            .max() ?? profile.asOfDate
     }
 
-    /// Money from the current account balance that is liquid today after every hard
-    /// protection is honored. This deliberately excludes the optional safety buffer:
-    /// the remainder is the user's actual spendable balance; the buffer can still
-    /// downgrade a purchase from safe to tight.
-    public static func liquidCashToday(profile: FinancialProfile) -> Double {
-        max(0, profile.currentCash - protectedCashToday(profile: profile))
+    /// The date through which the plan has to stay viable: the furthest of the user's
+    /// runway date, any active goal and any dated event, bounded by
+    /// `maximumPlanningHorizonInDays`.
+    public static func defaultPlanningHorizon(
+        profile: FinancialProfile,
+        calendar: Calendar = .current
+    ) -> Date {
+        var horizon = profile.asOfDate
+
+        if let runway = profile.cashMustLastUntil {
+            horizon = max(horizon, runway)
+        }
+        for goal in profile.goals where goal.lifecycleState == .active && goal.remainingAmount > 0 {
+            horizon = max(horizon, goal.deadline)
+        }
+        for event in profile.incomeEvents {
+            horizon = max(horizon, event.date)
+        }
+        for event in profile.expenseEvents where event.committed {
+            horizon = max(horizon, event.date)
+        }
+
+        guard let cap = calendar.date(
+            byAdding: .day,
+            value: maximumPlanningHorizonInDays,
+            to: profile.asOfDate
+        ) else {
+            return horizon
+        }
+        return min(horizon, cap)
+    }
+
+    /// Money that can leave the account today without breaking any hard requirement on
+    /// any day of the plan. Unlike a static reservation this is forecast-aware: a goal
+    /// that future income already covers stops holding today's balance hostage.
+    ///
+    /// It deliberately excludes the optional safety buffer, so the remainder is the
+    /// user's genuinely unspoken-for balance; the buffer can still downgrade a purchase
+    /// from safe to tight.
+    public static func liquidCashToday(
+        profile: FinancialProfile,
+        through planningHorizon: Date? = nil,
+        calendar: Calendar = .current
+    ) throws -> Double {
+        let horizon = max(
+            planningHorizon ?? defaultPlanningHorizon(profile: profile, calendar: calendar),
+            profile.asOfDate
+        )
+        let headroom = try minimumHeadroom(
+            profile: profile,
+            from: profile.asOfDate,
+            through: horizon,
+            calendar: calendar
+        )
+        return max(0, headroom.minimumHardHeadroom)
+    }
+
+    /// Everything in today's balance that the plan has already spoken for: minimums the
+    /// user must keep plus the part of future commitments today's cash has to cover.
+    public static func protectedCashToday(
+        profile: FinancialProfile,
+        through planningHorizon: Date? = nil,
+        calendar: Calendar = .current
+    ) throws -> Double {
+        let liquid = try liquidCashToday(
+            profile: profile,
+            through: planningHorizon,
+            calendar: calendar
+        )
+        return max(0, profile.currentCash - liquid)
     }
 
     public static func expectedIncome(profile: FinancialProfile, targetDate: Date) -> Double {
@@ -207,13 +285,19 @@ public enum FinancialEngine {
             throw FinancialEngineError.targetDateBeforeProfileDate
         }
 
+        // A caller may legitimately ask about a short window, but a must-happen goal
+        // beyond that window is still committed money. Scanning to the obligation
+        // horizon keeps that cash from looking spendable without turning the goal into
+        // a reservation held from today.
+        let scanEnd = max(endDate, obligationHorizon(profile: profile))
+
         var date = startDate
         var minHard = Double.greatestFiniteMagnitude
         var minRecommended = Double.greatestFiniteMagnitude
         var minHardDate = startDate
         var minRecommendedDate = startDate
 
-        while date <= endDate {
+        while date <= scanEnd {
             let result = try forecast(profile: profile, targetDate: date, calendar: calendar)
 
             if result.hardHeadroom < minHard {

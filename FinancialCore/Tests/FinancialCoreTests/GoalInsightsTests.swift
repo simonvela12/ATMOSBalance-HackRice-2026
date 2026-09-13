@@ -41,9 +41,9 @@ final class GoalInsightsTests: XCTestCase {
         XCTAssertTrue(result.includedInBaseline)
         XCTAssertEqual(result.shortfallToHardFloor, 200, accuracy: 0.001)
         XCTAssertEqual(result.shortfallToRecommendedFloor, 300, accuracy: 0.001)
-        // Must-happen goals are protected from the as-of date onward, so the
-        // shortfall is already real today rather than appearing on the deadline.
-        XCTAssertEqual(result.tightestDate, asOf)
+        // A goal is a requirement on its own date, not a reservation held from today,
+        // so the shortfall appears on the deadline rather than immediately.
+        XCTAssertEqual(result.tightestDate, date(2026, 10, 1))
         XCTAssertEqual(result.effectiveDeadline, date(2026, 10, 1))
         XCTAssertNil(result.recommendedDate)
 

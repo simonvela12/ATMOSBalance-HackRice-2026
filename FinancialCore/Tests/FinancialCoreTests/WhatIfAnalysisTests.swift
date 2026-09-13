@@ -191,7 +191,7 @@ final class WhatIfAnalysisTests: XCTestCase {
             targetAmount: 1000,
             deadline: date(2026, 12, 26),
             priority: .mandatory,
-            flexibility: .low
+            flexibility: .fixed
         )
         let profile = FinancialProfile(
             currentCash: 2350,
@@ -210,9 +210,118 @@ final class WhatIfAnalysisTests: XCTestCase {
             calendar: calendar
         )
 
-        XCTAssertEqual(FinancialEngine.liquidCashToday(profile: profile), 1350, accuracy: 0.001)
+        XCTAssertEqual(
+            try FinancialEngine.liquidCashToday(profile: profile, calendar: calendar),
+            1350,
+            accuracy: 0.001
+        )
         XCTAssertEqual(result.purchaseAssessment.status, .notSafe)
         XCTAssertEqual(result.purchaseAssessment.shortfallToHardFloor, 150, accuracy: 0.001)
         XCTAssertEqual(result.purchaseExplanation.reason, .violatesProtectedGoal)
+    }
+
+    /// A What-If has to answer with the whole picture: the headline number before and
+    /// after, the runway, every scenario, and the constraint that binds.
+    private func runwayProfile(cash: Double) -> FinancialProfile {
+        let asOf = date(2026, 9, 12)
+        let history = (0..<6).map { index in
+            WeeklySpendingSample(
+                weekStart: calendar.date(byAdding: .day, value: -(index * 7), to: asOf)!,
+                totalVariableSpending: 70
+            )
+        }
+        return FinancialProfile(
+            currentCash: cash,
+            asOfDate: asOf,
+            weeklySpendingHistory: history,
+            spendingPolicy: SpendingPolicy(bufferWeeks: 0, manualMinimumBuffer: 0),
+            cashMustLastUntil: calendar.date(byAdding: .day, value: 30, to: asOf)!
+        )
+    }
+
+    func testWhatIfReportsBaselineAndScenarioForEveryDimension() throws {
+        let profile = runwayProfile(cash: 1000)
+        let asOf = profile.asOfDate
+
+        let result = try FinancialInsights.analyzePurchaseWhatIf(
+            profile: profile,
+            amount: 180,
+            purchaseDate: asOf,
+            planningHorizon: calendar.date(byAdding: .day, value: 30, to: asOf)!,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(result.safeToSpendBefore.primary.amount, 700, accuracy: 0.001)
+        XCTAssertEqual(result.safeToSpendAfter.primary.amount, 520, accuracy: 0.001)
+        XCTAssertEqual(result.scenarioOutcomes.count, 3)
+        XCTAssertEqual(
+            result.scenarioOutcomes.map(\.scenario),
+            [.conservative, .expected, .optimistic]
+        )
+        XCTAssertTrue(result.runwayBefore.isSatisfied)
+        XCTAssertTrue(result.runwayAfter.isSatisfied)
+        XCTAssertEqual(result.recommendation, .recommended)
+    }
+
+    func testWhatIfRefusesAPurchaseThatShortensTheRunway() throws {
+        let profile = runwayProfile(cash: 1000)
+        let asOf = profile.asOfDate
+
+        let result = try FinancialInsights.analyzePurchaseWhatIf(
+            profile: profile,
+            amount: 900,
+            purchaseDate: asOf,
+            planningHorizon: calendar.date(byAdding: .day, value: 30, to: asOf)!,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(result.recommendation, .notRecommended)
+        XCTAssertFalse(result.runwayAfter.isSatisfied)
+        XCTAssertEqual(result.safeToSpendAfter.primary.amount, 0, accuracy: 0.001)
+        XCTAssertNotNil(result.runwayAfter.projectedDepletionDate)
+
+        let shift = try XCTUnwrap(result.runwayShiftInDays(calendar: calendar))
+        XCTAssertLessThan(shift, 0)
+    }
+
+    func testWhatIfNamesTheUncertainIncomeAPurchaseWouldRelyOn() throws {
+        let asOf = date(2026, 9, 12)
+        let profile = FinancialProfile(
+            currentCash: 1000,
+            asOfDate: asOf,
+            incomeEvents: [
+                IncomeEvent(
+                    amount: 400,
+                    date: date(2026, 9, 22),
+                    source: "Freelance invoice",
+                    type: .oneTime,
+                    reliability: .uncertain
+                )
+            ],
+            expenseEvents: [
+                ExpenseEvent(
+                    amount: 800,
+                    date: date(2026, 10, 2),
+                    category: "Tuition",
+                    committed: true
+                )
+            ],
+            spendingPolicy: SpendingPolicy(bufferWeeks: 0, manualMinimumBuffer: 0)
+        )
+
+        let result = try FinancialInsights.analyzePurchaseWhatIf(
+            profile: profile,
+            amount: 300,
+            purchaseDate: asOf,
+            planningHorizon: date(2026, 10, 2),
+            calendar: calendar
+        )
+
+        // The cautious answer says no; the expected answer only says yes because of a
+        // payment that may not arrive, and the user has to be told which one.
+        XCTAssertEqual(result.recommendation, .notRecommended)
+        XCTAssertEqual(result.dependsOnUncertainIncome.count, 1)
+        XCTAssertEqual(result.dependsOnUncertainIncome.first?.source, "Freelance invoice")
+        XCTAssertEqual(result.dependsOnUncertainIncome.first?.reliability, .uncertain)
     }
 }

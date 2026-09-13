@@ -99,7 +99,7 @@ final class PurchaseExplanationTests: XCTestCase {
                     targetAmount: 1000,
                     deadline: date(2026, 12, 26),
                     priority: .mandatory,
-                    flexibility: .low
+                    flexibility: .fixed
                 )
             ],
             spendingPolicy: SpendingPolicy(bufferWeeks: 0, manualMinimumBuffer: 0)
@@ -115,8 +115,13 @@ final class PurchaseExplanationTests: XCTestCase {
 
         XCTAssertEqual(result.assessment.status, .notSafe)
         XCTAssertEqual(result.explanation.reason, .violatesProtectedGoal)
-        XCTAssertEqual(result.explanation.hardFloor, 1000, accuracy: 0.001)
-        XCTAssertEqual(result.explanation.projectedCashAfterPurchase, 850, accuracy: 0.001)
+
+        // The goal binds on the day it has to be paid, so that is the day the
+        // explanation talks about: $1,350 left after Miami, minus a $1,500 purchase.
+        XCTAssertEqual(result.explanation.limitingDate, date(2026, 12, 26))
+        XCTAssertEqual(result.explanation.hardFloor, 0, accuracy: 0.001)
+        XCTAssertEqual(result.explanation.projectedCashBeforePurchase, 1350, accuracy: 0.001)
+        XCTAssertEqual(result.explanation.projectedCashAfterPurchase, -150, accuracy: 0.001)
         XCTAssertEqual(result.explanation.shortfallToHardFloor, 150, accuracy: 0.001)
     }
 
@@ -134,7 +139,7 @@ final class PurchaseExplanationTests: XCTestCase {
                     targetAmount: 1000,
                     deadline: date(2026, 12, 26),
                     priority: .mandatory,
-                    flexibility: .low
+                    flexibility: .fixed
                 )
             ],
             spendingPolicy: SpendingPolicy(bufferWeeks: 0, manualMinimumBuffer: 0)

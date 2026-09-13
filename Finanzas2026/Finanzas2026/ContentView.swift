@@ -22,6 +22,9 @@ struct ContentView: View {
     @State private var excludedOccurrences: Set<String> = []
     @State private var occurrenceNameOverrides: [String: String] = [:]
     @State private var minimumCashReserve: Double?
+    /// "My money has to last until this date." A requirement over the whole period,
+    /// never a payment on that day.
+    @State private var cashMustLastUntil: Date?
     @State private var savingsAllocation: [UUID: Double] = [:]
     @State private var savingsPot: Double = 0
 
@@ -33,6 +36,7 @@ struct ContentView: View {
             goals: goals,
             entries: addedEntries,
             minimumCashReserve: minimumCashReserve,
+            cashMustLastUntil: cashMustLastUntil,
             deletedForecastDays: deletedForecastDays,
             excludedOccurrences: excludedOccurrences,
             occurrenceNameOverrides: occurrenceNameOverrides
@@ -46,6 +50,7 @@ struct ContentView: View {
         goals = plan.goals
         addedEntries = plan.entries
         minimumCashReserve = plan.minimumCashReserve
+        cashMustLastUntil = plan.cashMustLastUntil
         deletedForecastDays = plan.deletedForecastDays
         excludedOccurrences = plan.excludedOccurrences
         occurrenceNameOverrides = plan.occurrenceNameOverrides
@@ -144,7 +149,8 @@ struct ContentView: View {
             goals: engineGoals(allocation: allocation),
             plannedIncome: planned.income,
             plannedExpenses: planned.expenses,
-            minimumCashReserve: minimumCashReserve
+            minimumCashReserve: minimumCashReserve,
+            cashMustLastUntil: cashMustLastUntil
         )
         let timeline = (try? FinancialInsights.cashFlowTimeline(
             profile: profile,
@@ -159,6 +165,10 @@ struct ContentView: View {
             goalPortfolio: try? SmartGoalEngine.evaluate(
                 profile: profile,
                 planningHorizon: horizon,
+                calendar: AppFinancialData.calendar
+            ),
+            safeToSpend: try? SafeToSpendEngine.evaluateAllScenarios(
+                profile: profile,
                 calendar: AppFinancialData.calendar
             )
         )
@@ -491,6 +501,10 @@ struct ContentView: View {
             goals: displayGoals,
             accrued: savingsAllocation.mapValues { Int($0.rounded()) },
             portfolio: goalPortfolio,
+            safeToSpend: liveContext.safeToSpend?.primary,
+            cashMustLastUntil: cashMustLastUntil,
+            // Saving and rebuilding are already driven by `onChange(of: currentPlan)`.
+            onSetRunway: { cashMustLastUntil = $0 },
             onAdd: {
                 goalBeingEdited = nil
                 showingAddGoal = true
@@ -1119,11 +1133,63 @@ private struct GoalsCard: View {
     let goals: [FinancialGoal]
     let accrued: [UUID: Int]
     let portfolio: GoalPortfolioHealth?
+    /// The conservative answer from the engine. Nil until the bank data has loaded.
+    let safeToSpend: SafeToSpendResult?
+    let cashMustLastUntil: Date?
+    let onSetRunway: (Date?) -> Void
     let onAdd: () -> Void
     let onEdit: (FinancialGoal) -> Void
     let onDelete: (FinancialGoal) -> Void
     let onTogglePause: (FinancialGoal) -> Void
     let onComplete: (FinancialGoal) -> Void
+
+    /// "My money has to last until X" is a requirement over a whole period, so it
+    /// lives beside the goals rather than pretending to be a payment on that date.
+    @ViewBuilder
+    private var runwayRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("MONEY MUST LAST UNTIL")
+                    .font(.helvetica(.caption2, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.48))
+                Spacer()
+                if cashMustLastUntil != nil {
+                    Button("Clear") { onSetRunway(nil) }
+                        .font(.helvetica(.caption2, weight: .semibold))
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.white.opacity(0.55))
+                }
+            }
+
+            DatePicker(
+                "Money must last until",
+                selection: Binding(
+                    get: {
+                        cashMustLastUntil
+                            ?? Calendar.current.date(byAdding: .month, value: 3, to: Date())
+                            ?? Date()
+                    },
+                    set: { onSetRunway($0) }
+                ),
+                displayedComponents: .date
+            )
+            .datePickerStyle(.compact)
+            .labelsHidden()
+            .tint(.white)
+
+            if let runway = safeToSpend?.runway, runway.requestedDate != nil {
+                Text(
+                    runway.isSatisfied
+                        ? "On this plan your money lasts past that date."
+                        : "On this plan your money runs out on \(runway.viableThrough.formatted(.dateTime.month(.abbreviated).day()))."
+                )
+                .font(.helvetica(.caption2, weight: .semibold))
+                .foregroundStyle(runway.isSatisfied ? .white.opacity(0.48) : Color.sunGold)
+            }
+        }
+        .padding(11)
+        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 11))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -1149,23 +1215,37 @@ private struct GoalsCard: View {
                 .buttonStyle(.plain)
             }
 
-            if let portfolio, !goals.isEmpty {
+            if !goals.isEmpty, let safeToSpend {
+                // Goals are dated requirements, so the useful pair of numbers is what is
+                // spendable now and what the future has already claimed. A weekly
+                // contribution figure would imply a savings jar that does not exist.
                 HStack(spacing: 10) {
                     GoalPortfolioMetric(
                         title: "SAFE TO SPEND",
-                        value: portfolio.safeToSpendToday.formatted(.currency(code: "USD").precision(.fractionLength(0)))
+                        value: safeToSpend.amount.formatted(.currency(code: "USD").precision(.fractionLength(0)))
                     )
                     GoalPortfolioMetric(
-                        title: "SAVE EACH WEEK",
-                        value: portfolio.requiredToSaveWeekly.formatted(.currency(code: "USD").precision(.fractionLength(0)))
+                        title: "COMMITTED",
+                        value: safeToSpend.futureCommitments.formatted(.currency(code: "USD").precision(.fractionLength(0)))
                     )
                 }
-                if let delayedID = portfolio.recommendedGoalToDelayID,
-                   let delayed = goals.first(where: { $0.id == delayedID }) {
-                    Label("Protect higher-priority goals; consider moving \(delayed.name).",
-                          systemImage: "arrow.triangle.branch")
-                        .font(.helvetica(.caption, weight: .semibold))
-                        .foregroundStyle(Color.sunGold)
+
+                runwayRow
+
+                if let moved = safeToSpend.delayedGoals.first {
+                    Label(
+                        "\(moved.goal.name) moves to \(moved.projectedDate.formatted(.dateTime.month(.abbreviated).day())) so more important goals stay on time.",
+                        systemImage: "arrow.triangle.branch"
+                    )
+                    .font(.helvetica(.caption, weight: .semibold))
+                    .foregroundStyle(Color.sunGold)
+                } else if let stuck = safeToSpend.unreachableGoals.first {
+                    Label(
+                        "\(stuck.goal.name) cannot be met within the flexibility you allowed.",
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .font(.helvetica(.caption, weight: .semibold))
+                    .foregroundStyle(Color.sunGold)
                 }
             }
 
@@ -1198,6 +1278,7 @@ private struct GoalsCard: View {
                                 goal: goal,
                                 accrued: accrued[goal.id] ?? 0,
                                 health: portfolio?.goals.first(where: { $0.goal.id == goal.id }),
+                                projection: safeToSpend?.goalProjections.first(where: { $0.goal.id == goal.id }),
                                 onEdit: { onEdit(goal) },
                                 onDelete: { onDelete(goal) },
                                 onTogglePause: { onTogglePause(goal) },
@@ -1241,6 +1322,8 @@ private struct GoalProgressTile: View {
     let goal: FinancialGoal
     let accrued: Int
     let health: GoalHealth?
+    /// What the plan intends to do about this goal: keep the date, or move it.
+    let projection: GoalProjection?
     let onEdit: () -> Void
     let onDelete: () -> Void
     let onTogglePause: () -> Void
@@ -1277,13 +1360,23 @@ private struct GoalProgressTile: View {
                 .accessibilityLabel("Goal options")
             }
 
-            if let health {
+            if let projection {
+                HStack {
+                    Text(goalProjectionTitle(projection.status))
+                        .font(.helvetica(.caption2, weight: .bold))
+                        .foregroundStyle(goalProjectionColor(projection.status))
+                    Spacer()
+                    Text("\(goal.priority.title) · \(goal.flexibility.shortTitle)")
+                        .font(.helvetica(.caption2, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.45))
+                }
+            } else if let health {
                 HStack {
                     Text(goalStatusTitle(health.status))
                         .font(.helvetica(.caption2, weight: .bold))
                         .foregroundStyle(goalStatusColor(health.status))
                     Spacer()
-                    Text("\(goal.priority.title) · \(goal.flexibility.title) flex")
+                    Text("\(goal.priority.title) · \(goal.flexibility.shortTitle)")
                         .font(.helvetica(.caption2, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.45))
                 }
@@ -1292,6 +1385,12 @@ private struct GoalProgressTile: View {
             Text(goal.name)
                 .font(.helvetica(.headline, weight: .semibold))
                 .lineLimit(1)
+
+            if let projection, projection.wasDelayed {
+                Text("Projected \(projection.projectedDate.formatted(.dateTime.month(.abbreviated).day()))")
+                    .font(.helvetica(.caption2, weight: .semibold))
+                    .foregroundStyle(Color.sunGold)
+            }
 
             HStack(spacing: 6) {
                 Text(goal.targetDate, format: .dateTime.month(.abbreviated).day().year())
@@ -1363,7 +1462,7 @@ private struct AddGoalSheet: View {
     @State private var symbol = "airplane"
     @State private var mustHappen = true
     @State private var priority = GoalPriority.medium
-    @State private var flexibility = GoalFlexibility.medium
+    @State private var flexibility = GoalFlexibility.maxDelay(days: 30)
 
     init(existingGoal: FinancialGoal? = nil, onSave: @escaping (FinancialGoal) -> Void) {
         self.existingGoal = existingGoal
@@ -1375,7 +1474,7 @@ private struct AddGoalSheet: View {
         _symbol = State(initialValue: existingGoal?.symbol ?? "airplane")
         _mustHappen = State(initialValue: existingGoal?.mustHappen ?? true)
         _priority = State(initialValue: existingGoal?.priority ?? .medium)
-        _flexibility = State(initialValue: existingGoal?.flexibility ?? .medium)
+        _flexibility = State(initialValue: existingGoal?.flexibility ?? .maxDelay(days: 30))
     }
 
     private var targetAmount: Int { Int(amountText.filter(\.isNumber)) ?? 0 }
@@ -1438,12 +1537,13 @@ private struct AddGoalSheet: View {
 
                     EntryCard(title: "FLEXIBILITY") {
                         Picker("Flexibility", selection: $flexibility) {
-                            Text("Low").tag(GoalFlexibility.low)
-                            Text("Medium").tag(GoalFlexibility.medium)
-                            Text("High").tag(GoalFlexibility.high)
+                            ForEach(GoalFlexibility.presets, id: \.rawValue) { option in
+                                Text(option.title).tag(option)
+                            }
                         }
-                        .pickerStyle(.segmented)
-                        Text("Less flexible goals receive stronger protection when goals compete.")
+                        .pickerStyle(.menu)
+                        .tint(.white)
+                        Text("Flexibility is about the date, never the amount. A fixed date is protected first; a flexible one can move within its limit to keep more important goals on time.")
                             .font(.caption)
                             .foregroundStyle(.white.opacity(0.55))
                             .padding(.top, 6)
@@ -1482,6 +1582,28 @@ private struct AddGoalSheet: View {
             .scrollIndicators(.hidden)
         }
         .preferredColorScheme(.dark)
+    }
+}
+
+private extension FinancialScenario {
+    var title: String {
+        switch self {
+        case .conservative: "Conservative"
+        case .expected: "Expected"
+        case .optimistic: "Optimistic"
+        }
+    }
+}
+
+private extension ScenarioPurchaseOutcome {
+    /// One phrase per scenario, so the three read as a spread rather than three numbers.
+    var outcomeTitle: String {
+        if !runwaySatisfied { return "Runs out early" }
+        switch status {
+        case .safe: return "Safe"
+        case .tight: return "Safe but tight"
+        case .notSafe: return "Not safe"
+        }
     }
 }
 
@@ -1543,20 +1665,22 @@ private struct WhatIfSheet: View {
 
     private var status: PurchaseStatus? { analysis?.purchaseAssessment.status }
 
+    private var recommendation: PurchaseRecommendation? { analysis?.recommendation }
+
     private var resultWeather: MoneyWeather {
-        switch status {
-        case .safe: return .sunny
-        case .tight: return .rain
-        case .notSafe: return .storm
+        switch recommendation {
+        case .recommended: return .sunny
+        case .possibleButTight: return .rain
+        case .notRecommended: return .storm
         case nil: return .partlySunny
         }
     }
 
     private var headline: String {
-        switch status {
-        case .safe: return "This fits your plan"
-        case .tight: return "Possible, but it gets tight"
-        case .notSafe: return "This crosses a protected minimum"
+        switch recommendation {
+        case .recommended: return "This fits your plan"
+        case .possibleButTight: return "Possible, but it gets tight"
+        case .notRecommended: return "Not recommended"
         case nil: return schedule == .recurring ? "Try a recurring payment" : "Try a purchase"
         }
     }
@@ -1661,6 +1785,56 @@ private struct WhatIfSheet: View {
                         }
                         .padding(.horizontal, 16)
                         .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                        VStack(spacing: 0) {
+                            ScenarioMetric(
+                                title: "Safe to spend",
+                                value: Self.money.format(analysis.safeToSpendBefore.primary.amount)
+                                    + " → "
+                                    + Self.money.format(analysis.safeToSpendAfter.primary.amount)
+                            )
+
+                            if let requested = analysis.runwayBefore.requestedDate {
+                                Divider().overlay(.white.opacity(0.12))
+                                ScenarioMetric(
+                                    title: "Money lasts until",
+                                    value: requested.formatted(.dateTime.month(.abbreviated).day())
+                                        + " → "
+                                        + analysis.runwayAfter.viableThrough
+                                            .formatted(.dateTime.month(.abbreviated).day())
+                                )
+                            }
+
+                            ForEach(analysis.movedGoals) { change in
+                                Divider().overlay(.white.opacity(0.12))
+                                ScenarioMetric(
+                                    title: change.name,
+                                    value: change.dateBefore.formatted(.dateTime.month(.abbreviated).day())
+                                        + " → "
+                                        + change.dateAfter.formatted(.dateTime.month(.abbreviated).day())
+                                )
+                            }
+
+                            ForEach(analysis.scenarioOutcomes, id: \.scenario) { outcome in
+                                Divider().overlay(.white.opacity(0.12))
+                                ScenarioMetric(
+                                    title: outcome.scenario.title,
+                                    value: outcome.outcomeTitle
+                                )
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                        if let dependency = analysis.dependsOnUncertainIncome.first {
+                            Label(
+                                "This only works if the \(Self.money.format(dependency.amount)) from \(dependency.source) actually arrives on \(dependency.date.formatted(.dateTime.month(.abbreviated).day())).",
+                                systemImage: "questionmark.circle.fill"
+                            )
+                            .font(.helvetica(.caption, weight: .semibold))
+                            .foregroundStyle(Color.sunGold)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
 
                         explanationCard
 
@@ -2765,6 +2939,7 @@ private struct UserPlan: Codable, Equatable {
     var goals: [FinancialGoal] = []
     var entries: [FinancialEntry] = []
     var minimumCashReserve: Double?
+    var cashMustLastUntil: Date?
     var deletedForecastDays: Set<String> = []
     var excludedOccurrences: Set<String> = []
     var occurrenceNameOverrides: [String: String] = [:]
@@ -2851,7 +3026,7 @@ private struct FinancialGoal: Identifiable, Codable, Equatable {
         symbol: String,
         isMandatory: Bool? = nil,
         priority: GoalPriority = .medium,
-        flexibility: GoalFlexibility = .medium,
+        flexibility: GoalFlexibility = .maxDelay(days: 30),
         lifecycleState: GoalLifecycleState = .active
     ) {
         self.id = id
@@ -2883,7 +3058,7 @@ private struct FinancialGoal: Identifiable, Codable, Equatable {
         priority = try container.decodeIfPresent(GoalPriority.self, forKey: .priority) ??
             (isMandatory == true ? .high : .medium)
         flexibility = try container.decodeIfPresent(GoalFlexibility.self, forKey: .flexibility) ??
-            (isMandatory == true ? .low : .medium)
+            (isMandatory == true ? .fixed : .maxDelay(days: 30))
         lifecycleState = try container.decodeIfPresent(GoalLifecycleState.self, forKey: .lifecycleState) ?? .active
     }
 
@@ -2900,7 +3075,54 @@ private extension GoalPriority {
 }
 
 private extension GoalFlexibility {
-    var title: String { rawValue.capitalized }
+    /// Wording the user sees. `maxDelay` is expressed in the unit that reads best.
+    var title: String {
+        switch self {
+        case .fixed:
+            return "Fixed date"
+        case .openEnded:
+            return "Open-ended"
+        case .maxDelay(let days):
+            if days % 30 == 0 && days >= 30 {
+                let months = days / 30
+                return months == 1 ? "Up to 1 month" : "Up to \(months) months"
+            }
+            if days % 7 == 0 && days >= 7 {
+                let weeks = days / 7
+                return weeks == 1 ? "Up to 1 week" : "Up to \(weeks) weeks"
+            }
+            return "Up to \(days) days"
+        }
+    }
+
+    /// The compact form used in dense rows.
+    var shortTitle: String {
+        switch self {
+        case .fixed: return "Fixed"
+        case .openEnded: return "Open"
+        case .maxDelay(let days): return "±\(days)d"
+        }
+    }
+}
+
+private func goalProjectionTitle(_ status: GoalProjectionStatus) -> String {
+    switch status {
+    case .onTrack: "On track"
+    case .adjusted: "Adjusted"
+    case .atRisk: "At risk"
+    case .unreachable: "Not reachable"
+    case .paused: "Paused"
+    case .completed: "Completed"
+    }
+}
+
+private func goalProjectionColor(_ status: GoalProjectionStatus) -> Color {
+    switch status {
+    case .onTrack, .completed: .green
+    case .adjusted, .atRisk: .orange
+    case .unreachable: .red
+    case .paused: .white.opacity(0.55)
+    }
 }
 
 private func goalStatusTitle(_ status: GoalStatus) -> String {

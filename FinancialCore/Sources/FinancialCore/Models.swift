@@ -26,18 +26,131 @@ public enum GoalPriority: String, Codable, CaseIterable, Hashable, Sendable {
     public var isProtected: Bool { self == .mandatory }
 }
 
-public enum GoalFlexibility: String, Codable, CaseIterable, Hashable, Sendable {
-    case low
-    case medium
-    case high
+/// How far a goal's deadline may slide when the plan cannot honour every goal at
+/// once. Flexibility is about the *date*, never the amount: the target amount is
+/// fixed unless the user changes it.
+public enum GoalFlexibility: Hashable, Sendable {
+    /// The date cannot move. A fixed goal behaves like a dated obligation.
+    case fixed
+    /// The date may move forward by at most this many days.
+    case maxDelay(days: Int)
+    /// The goal has no real deadline, so it is the first one to yield.
+    case openEnded
 
-    public var protectionWeight: Double {
+    /// Nil means "no upper bound"; zero means "cannot move at all".
+    public var maximumDelayInDays: Int? {
         switch self {
-        case .low: 1.5
-        case .medium: 1
-        case .high: 0.6
+        case .fixed: return 0
+        case .maxDelay(let days): return max(0, days)
+        case .openEnded: return nil
         }
     }
+
+    public var allowsDelay: Bool { maximumDelayInDays != 0 }
+
+    /// Higher means harder to move. Used when ranking which goals to protect first.
+    public var protectionWeight: Double {
+        switch self {
+        case .fixed:
+            return 1.5
+        case .maxDelay(let days):
+            if days <= 14 { return 1.2 }
+            if days <= 60 { return 1.0 }
+            return 0.8
+        case .openEnded:
+            return 0.6
+        }
+    }
+
+    /// Choices a picker can offer. The enum itself cannot be `CaseIterable`
+    /// because `maxDelay` carries a value.
+    public static var presets: [GoalFlexibility] {
+        [.fixed, .maxDelay(days: 14), .maxDelay(days: 30), .maxDelay(days: 60), .maxDelay(days: 180), .openEnded]
+    }
+}
+
+extension GoalFlexibility: RawRepresentable {
+    /// Persisted as a plain string so stored profiles stay a flat JSON document.
+    /// Legacy `low`/`medium`/`high` values keep decoding into the closest new case.
+    public init?(rawValue: String) {
+        switch rawValue {
+        case "fixed", "low":
+            self = .fixed
+        case "openEnded", "high":
+            self = .openEnded
+        case "medium":
+            self = .maxDelay(days: 30)
+        default:
+            let prefix = "maxDelay:"
+            guard rawValue.hasPrefix(prefix), let days = Int(rawValue.dropFirst(prefix.count)) else {
+                return nil
+            }
+            self = .maxDelay(days: max(0, days))
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .fixed: return "fixed"
+        case .openEnded: return "openEnded"
+        case .maxDelay(let days): return "maxDelay:\(max(0, days))"
+        }
+    }
+}
+
+extension GoalFlexibility: Codable {
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = try container.decode(String.self)
+        guard let value = GoalFlexibility(rawValue: raw) else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Unrecognised goal flexibility \"\(raw)\""
+            )
+        }
+        self = value
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
+/// How much a future income event can be counted on. This is deliberately separate
+/// from `IncomeType`: a recurring transfer from a parent is reliable, a freelance
+/// invoice that is likely to be paid is expected, and a speculative gig is uncertain.
+public enum IncomeReliability: String, Codable, CaseIterable, Hashable, Sendable {
+    /// Salary, recurring transfers: money the plan may treat as certain.
+    case reliable
+    /// Highly likely, but not guaranteed.
+    case expected
+    /// Speculative. The conservative recommendation must not depend on it.
+    case uncertain
+
+    /// Fraction of the nominal amount a scenario is willing to count on.
+    /// `confidence` only matters for income the user already marked uncertain.
+    public func multiplier(for scenario: FinancialScenario, confidence: Double) -> Double {
+        let bounded = min(max(confidence, 0), 1)
+        switch self {
+        case .reliable:
+            return 1
+        case .expected:
+            switch scenario {
+            case .conservative: return 0.5
+            case .expected, .optimistic: return 1
+            }
+        case .uncertain:
+            switch scenario {
+            case .conservative: return 0
+            case .expected: return bounded
+            case .optimistic: return 1
+            }
+        }
+    }
+
+    /// True when a plan may lean on this money without a caveat.
+    public var isGuaranteed: Bool { self == .reliable }
 }
 
 public enum GoalLifecycleState: String, Codable, Hashable, Sendable {
@@ -65,12 +178,25 @@ public struct IncomeEvent: Codable, Identifiable, Sendable {
     public let source: String
     public let type: IncomeType
     public let confidence: Double
+    /// How much of this money the plan is allowed to count on. When it is not set
+    /// explicitly it is derived from `type`, so profiles written before reliability
+    /// existed keep behaving exactly as they did.
+    public let reliability: IncomeReliability
     public let amountRange: AmountRange?
     public let dateWindow: DateWindow?
     public let recurrenceRule: RecurrenceRule?
     public let allocations: [IncomeAllocation]?
     public let planningSource: PlanningEventSource?
     public let planningStatus: PlanningEventStatus?
+
+    /// Recurring money is reliable, irregular money is uncertain. One-off payments
+    /// the user entered deliberately are treated as reliable unless they say otherwise.
+    public static func defaultReliability(for type: IncomeType) -> IncomeReliability {
+        switch type {
+        case .recurring, .oneTime: return .reliable
+        case .irregular: return .uncertain
+        }
+    }
 
     public init(
         id: UUID = UUID(),
@@ -79,6 +205,7 @@ public struct IncomeEvent: Codable, Identifiable, Sendable {
         source: String,
         type: IncomeType,
         confidence: Double = 1.0,
+        reliability: IncomeReliability? = nil,
         amountRange: AmountRange? = nil,
         dateWindow: DateWindow? = nil,
         recurrenceRule: RecurrenceRule? = nil,
@@ -92,6 +219,7 @@ public struct IncomeEvent: Codable, Identifiable, Sendable {
         self.source = source
         self.type = type
         self.confidence = confidence
+        self.reliability = reliability ?? IncomeEvent.defaultReliability(for: type)
         self.amountRange = amountRange
         self.dateWindow = dateWindow
         self.recurrenceRule = recurrenceRule
@@ -100,13 +228,33 @@ public struct IncomeEvent: Codable, Identifiable, Sendable {
         self.planningStatus = planningStatus
     }
 
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        amount = try container.decode(Double.self, forKey: .amount)
+        date = try container.decode(Date.self, forKey: .date)
+        source = try container.decode(String.self, forKey: .source)
+        type = try container.decode(IncomeType.self, forKey: .type)
+        confidence = try container.decodeIfPresent(Double.self, forKey: .confidence) ?? 1.0
+        reliability = try container.decodeIfPresent(IncomeReliability.self, forKey: .reliability)
+            ?? IncomeEvent.defaultReliability(for: type)
+        amountRange = try container.decodeIfPresent(AmountRange.self, forKey: .amountRange)
+        dateWindow = try container.decodeIfPresent(DateWindow.self, forKey: .dateWindow)
+        recurrenceRule = try container.decodeIfPresent(RecurrenceRule.self, forKey: .recurrenceRule)
+        allocations = try container.decodeIfPresent([IncomeAllocation].self, forKey: .allocations)
+        planningSource = try container.decodeIfPresent(PlanningEventSource.self, forKey: .planningSource)
+        planningStatus = try container.decodeIfPresent(PlanningEventStatus.self, forKey: .planningStatus)
+    }
+
+    /// The amount the baseline plan counts on. Reliability, not the raw type, decides
+    /// how much of the nominal amount survives.
     public var adjustedAmount: Double {
-        switch type {
-        case .irregular:
-            return amount * min(max(confidence, 0), 1)
-        case .recurring, .oneTime:
-            return amount
-        }
+        scenarioAdjustedAmount(for: .expected)
+    }
+
+    /// The amount a specific scenario is willing to count on.
+    public func scenarioAdjustedAmount(for scenario: FinancialScenario) -> Double {
+        amount * reliability.multiplier(for: scenario, confidence: confidence)
     }
 }
 
@@ -328,6 +476,10 @@ public struct FinancialProfile: Codable, Sendable {
     public var goals: [Goal]
     public var weeklySpendingHistory: [WeeklySpendingSample]
     public var spendingPolicy: SpendingPolicy
+    /// "My money has to last until this date." It is a viability requirement over the
+    /// whole period, not a payment: nothing is ever deducted for it. The engine simply
+    /// refuses to call money spendable if spending it would break the plan before then.
+    public var cashMustLastUntil: Date?
 
     public init(
         currentCash: Double,
@@ -338,7 +490,8 @@ public struct FinancialProfile: Codable, Sendable {
         expenseEvents: [ExpenseEvent] = [],
         goals: [Goal] = [],
         weeklySpendingHistory: [WeeklySpendingSample] = [],
-        spendingPolicy: SpendingPolicy = SpendingPolicy()
+        spendingPolicy: SpendingPolicy = SpendingPolicy(),
+        cashMustLastUntil: Date? = nil
     ) {
         self.currentCash = currentCash
         self.asOfDate = asOfDate
@@ -349,6 +502,7 @@ public struct FinancialProfile: Codable, Sendable {
         self.goals = goals
         self.weeklySpendingHistory = weeklySpendingHistory
         self.spendingPolicy = spendingPolicy
+        self.cashMustLastUntil = cashMustLastUntil
     }
 }
 

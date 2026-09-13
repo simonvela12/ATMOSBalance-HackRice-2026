@@ -12,7 +12,7 @@ final class ProtectedFundsTests: XCTestCase {
         calendar.date(from: DateComponents(year: year, month: month, day: day))!
     }
 
-    func testMandatoryGoalIsProtectedFromCurrentBalanceImmediately() throws {
+    func testMandatoryGoalCommitsTodaysBalanceWhenNothingElseCanPayForIt() throws {
         let asOf = date(2026, 9, 12)
         let deadline = date(2026, 12, 26)
         let profile = FinancialProfile(
@@ -25,7 +25,7 @@ final class ProtectedFundsTests: XCTestCase {
                     amountAlreadyPaid: 0,
                     deadline: deadline,
                     priority: .mandatory,
-                    flexibility: .low
+                    flexibility: .fixed
                 )
             ],
             spendingPolicy: SpendingPolicy(bufferWeeks: 0, manualMinimumBuffer: 0)
@@ -36,14 +36,66 @@ final class ProtectedFundsTests: XCTestCase {
             1000,
             accuracy: 0.001
         )
-        XCTAssertEqual(FinancialEngine.protectedCashToday(profile: profile), 1000, accuracy: 0.001)
-        XCTAssertEqual(FinancialEngine.hardFloor(profile: profile, on: asOf), 1000, accuracy: 0.001)
-        XCTAssertEqual(FinancialEngine.liquidCashToday(profile: profile), 1350, accuracy: 0.001)
+
+        // The goal is not part of the floor. It is a payment due in December, and with
+        // no income before then today's balance is the only thing that can cover it —
+        // which is what the forecast works out rather than what a reservation asserts.
+        XCTAssertEqual(FinancialEngine.hardFloor(profile: profile, on: asOf), 0, accuracy: 0.001)
+        XCTAssertEqual(
+            try FinancialEngine.protectedCashToday(profile: profile, calendar: calendar),
+            1000,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            try FinancialEngine.liquidCashToday(profile: profile, calendar: calendar),
+            1350,
+            accuracy: 0.001
+        )
 
         let today = try FinancialEngine.forecast(profile: profile, targetDate: asOf, calendar: calendar)
         XCTAssertEqual(today.projectedCash, 2350, accuracy: 0.001)
-        XCTAssertEqual(today.hardFloor, 1000, accuracy: 0.001)
-        XCTAssertEqual(today.hardHeadroom, 1350, accuracy: 0.001)
+        XCTAssertEqual(today.hardFloor, 0, accuracy: 0.001)
+        XCTAssertEqual(today.hardHeadroom, 2350, accuracy: 0.001)
+    }
+
+    func testFutureIncomeReleasesCashAGoalWouldOtherwiseCommit() throws {
+        let asOf = date(2026, 9, 12)
+        let profile = FinancialProfile(
+            currentCash: 2350,
+            asOfDate: asOf,
+            incomeEvents: [
+                IncomeEvent(
+                    amount: 1200,
+                    date: date(2026, 12, 1),
+                    source: "Salary",
+                    type: .recurring,
+                    reliability: .reliable
+                )
+            ],
+            goals: [
+                Goal(
+                    name: "Miami",
+                    targetAmount: 1000,
+                    deadline: date(2026, 12, 26),
+                    priority: .mandatory,
+                    flexibility: .fixed
+                )
+            ],
+            spendingPolicy: SpendingPolicy(bufferWeeks: 0, manualMinimumBuffer: 0)
+        )
+
+        // December's paycheck pays for Miami, so holding today's money back would be a
+        // fiction. The whole balance is genuinely spendable.
+        XCTAssertEqual(
+            try FinancialEngine.liquidCashToday(profile: profile, calendar: calendar),
+            2350,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            try FinancialEngine.protectedCashToday(profile: profile, calendar: calendar),
+            0,
+            accuracy: 0.001
+        )
     }
 
     func testProtectionBecomesPaymentOnDeadlineWithoutDoubleCounting() throws {
@@ -58,7 +110,7 @@ final class ProtectedFundsTests: XCTestCase {
                     targetAmount: 1000,
                     deadline: deadline,
                     priority: .mandatory,
-                    flexibility: .low
+                    flexibility: .fixed
                 )
             ],
             spendingPolicy: SpendingPolicy(bufferWeeks: 0, manualMinimumBuffer: 0)
@@ -89,7 +141,7 @@ final class ProtectedFundsTests: XCTestCase {
                     targetAmount: 1000,
                     deadline: deadline,
                     priority: .mandatory,
-                    flexibility: .low
+                    flexibility: .fixed
                 )
             ],
             spendingPolicy: SpendingPolicy(bufferWeeks: 0, manualMinimumBuffer: 0)
@@ -126,15 +178,23 @@ final class ProtectedFundsTests: XCTestCase {
                     targetAmount: 1000,
                     deadline: asOf,
                     priority: .mandatory,
-                    flexibility: .low
+                    flexibility: .fixed
                 )
             ],
             spendingPolicy: SpendingPolicy(bufferWeeks: 0, manualMinimumBuffer: 0)
         )
 
         XCTAssertEqual(FinancialEngine.hardFloor(profile: profile, on: asOf), 0, accuracy: 0.001)
-        XCTAssertEqual(FinancialEngine.protectedCashToday(profile: profile), 1000, accuracy: 0.001)
-        XCTAssertEqual(FinancialEngine.liquidCashToday(profile: profile), 1350, accuracy: 0.001)
+        XCTAssertEqual(
+            try FinancialEngine.protectedCashToday(profile: profile, calendar: calendar),
+            1000,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            try FinancialEngine.liquidCashToday(profile: profile, calendar: calendar),
+            1350,
+            accuracy: 0.001
+        )
     }
 
     func testPausedMandatoryGoalDoesNotProtectOrPayUntilResumed() throws {
@@ -149,7 +209,7 @@ final class ProtectedFundsTests: XCTestCase {
                     targetAmount: 1000,
                     deadline: deadline,
                     priority: .mandatory,
-                    flexibility: .low,
+                    flexibility: .fixed,
                     lifecycleState: .paused
                 )
             ],
@@ -157,8 +217,16 @@ final class ProtectedFundsTests: XCTestCase {
         )
 
         XCTAssertEqual(FinancialEngine.hardFloor(profile: profile, on: asOf), 0, accuracy: 0.001)
-        XCTAssertEqual(FinancialEngine.protectedCashToday(profile: profile), 0, accuracy: 0.001)
-        XCTAssertEqual(FinancialEngine.liquidCashToday(profile: profile), 2350, accuracy: 0.001)
+        XCTAssertEqual(
+            try FinancialEngine.protectedCashToday(profile: profile, calendar: calendar),
+            0,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            try FinancialEngine.liquidCashToday(profile: profile, calendar: calendar),
+            2350,
+            accuracy: 0.001
+        )
 
         let result = try FinancialEngine.forecast(
             profile: profile,

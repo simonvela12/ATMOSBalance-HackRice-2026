@@ -13,6 +13,9 @@ struct LiveFinancialContext {
     let transactions: [FinanceCore.FinancialTransaction]
     let timeline: [CashFlowPoint]
     let goalPortfolio: GoalPortfolioHealth?
+    /// The one affordability answer, in all three scenarios. Views read it; they never
+    /// recompute affordability themselves.
+    let safeToSpend: ScenarioSafeToSpend?
 
     /// Grouped once at construction: these lookups run for every rendered day.
     private let transactionsByDay: [Date: [FinanceCore.FinancialTransaction]]
@@ -22,12 +25,14 @@ struct LiveFinancialContext {
         profile: FinancialProfile?,
         transactions: [FinanceCore.FinancialTransaction],
         timeline: [CashFlowPoint],
-        goalPortfolio: GoalPortfolioHealth? = nil
+        goalPortfolio: GoalPortfolioHealth? = nil,
+        safeToSpend: ScenarioSafeToSpend? = nil
     ) {
         self.profile = profile
         self.transactions = transactions
         self.timeline = timeline
         self.goalPortfolio = goalPortfolio
+        self.safeToSpend = safeToSpend
 
         let calendar = AppFinancialData.calendar
         self.transactionsByDay = Dictionary(

@@ -45,14 +45,14 @@ private struct ProtectedFundsBanner: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 14) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("AVAILABLE TO SPEND")
+                        Text("SAFE TO SPEND")
                             .font(.caption2.weight(.bold))
                             .tracking(1.1)
                             .foregroundStyle(.white.opacity(0.58))
-                        Text(Self.money.format(summary.available))
+                        Text(Self.money.format(summary.safeToSpend))
                             .font(.system(size: 30, weight: .semibold, design: .rounded))
                             .monospacedDigit()
-                            .contentTransition(.numericText(value: summary.available))
+                            .contentTransition(.numericText(value: summary.safeToSpend))
                         Text("of \(Self.money.format(summary.balance)) current balance")
                             .font(.caption)
                             .foregroundStyle(.white.opacity(0.50))
@@ -182,8 +182,11 @@ private struct ProtectedFundsBanner: View {
             minimumCashReserve: plan.minimumCashReserve
         )
 
-        let protected = FinancialEngine.protectedCashToday(profile: profile)
-        let available = FinancialEngine.liquidCashToday(profile: profile)
+        // One engine decides affordability. The banner only renders what it returns:
+        // no balance arithmetic happens in SwiftUI.
+        let state = try? SafeToSpendEngine.evaluate(profile: profile, scenario: .conservative)
+        let available = state?.hardCapacity ?? max(0, profile.currentCash)
+        let protected = max(0, profile.currentCash - available)
         let mandatory = engineGoals
             .filter {
                 $0.priority == .mandatory &&
@@ -206,6 +209,11 @@ private struct ProtectedFundsBanner: View {
             balance: max(0, profile.currentCash),
             protected: max(0, protected),
             available: max(0, available),
+            safeToSpend: max(0, state?.amount ?? 0),
+            safetyBuffer: max(0, state?.safetyReserve ?? 0),
+            futureCommitments: max(0, state?.futureCommitments ?? 0),
+            runwayRequestedDate: state?.runway.requestedDate,
+            runwayEndDate: state?.runway.projectedDepletionDate,
             commitments: mandatory,
             reserveProtected: reserveProtected
         )
@@ -244,21 +252,64 @@ private struct ProtectedFundsDetailSheet: View {
                             .foregroundStyle(.white.opacity(0.58))
                         Text("What you can actually spend")
                             .font(.title2.weight(.bold))
-                        Text("Your bank balance stays visible, but goals and purchases are evaluated after this protected money is removed.")
+                        Text("Your goals are deadlines, not savings jars. Nothing is set aside: the plan is simulated forward and whatever survives that simulation is yours to spend today.")
                             .font(.subheadline)
                             .foregroundStyle(.white.opacity(0.60))
                     }
 
                     HStack(spacing: 12) {
                         ProtectedMetric(
-                            title: "AVAILABLE",
-                            value: Self.money.format(summary.available),
+                            title: "SAFE TO SPEND",
+                            value: Self.money.format(summary.safeToSpend),
                             symbol: "banknote.fill"
                         )
                         ProtectedMetric(
                             title: "PROTECTED",
                             value: Self.money.format(summary.protected),
                             symbol: "lock.fill"
+                        )
+                    }
+
+                    VStack(spacing: 0) {
+                        ProtectedBreakdownRow(
+                            title: "Total balance",
+                            value: Self.money.format(summary.balance)
+                        )
+                        Divider().overlay(.white.opacity(0.10))
+                        ProtectedBreakdownRow(
+                            title: "Future commitments",
+                            value: Self.money.format(summary.futureCommitments)
+                        )
+                        Divider().overlay(.white.opacity(0.10))
+                        ProtectedBreakdownRow(
+                            title: "Safety buffer",
+                            value: Self.money.format(summary.safetyBuffer)
+                        )
+                        Divider().overlay(.white.opacity(0.10))
+                        ProtectedBreakdownRow(
+                            title: "Safe to spend",
+                            value: Self.money.format(summary.safeToSpend),
+                            emphasised: true
+                        )
+                    }
+                    .padding(.horizontal, 16)
+                    .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+
+                    if let requested = summary.runwayRequestedDate {
+                        Label {
+                            if let end = summary.runwayEndDate, end <= requested {
+                                Text("Your money is projected to run out on \(end.formatted(.dateTime.month(.abbreviated).day())), before the \(requested.formatted(.dateTime.month(.abbreviated).day())) you asked it to last until.")
+                            } else {
+                                Text("Your money is projected to last past \(requested.formatted(.dateTime.month(.abbreviated).day())), as you asked.")
+                            }
+                        } icon: {
+                            Image(systemName: summary.runwayAtRisk ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                        }
+                        .font(.caption)
+                        .foregroundStyle(
+                            summary.runwayAtRisk
+                                ? Color(red: 1.00, green: 0.72, blue: 0.30)
+                                : .white.opacity(0.60)
                         )
                     }
 
@@ -306,7 +357,7 @@ private struct ProtectedFundsDetailSheet: View {
                     .padding(16)
                     .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
 
-                    Text("Rule: total balance − protected money = available to spend. Must-happen goals are protected immediately and stay out of purchase affordability until their deadline or completion.")
+                    Text("Rule: safe to spend is the most you can spend today while every goal is still payable on its date and your balance never drops below your floor. Money a future paycheck already covers is not held back.")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.52))
                         .lineSpacing(2)
@@ -318,6 +369,25 @@ private struct ProtectedFundsDetailSheet: View {
             .scrollIndicators(.hidden)
         }
         .preferredColorScheme(.dark)
+    }
+}
+
+private struct ProtectedBreakdownRow: View {
+    let title: String
+    let value: String
+    var emphasised = false
+
+    var body: some View {
+        HStack {
+            Text(title)
+                .font(emphasised ? .subheadline.weight(.bold) : .subheadline)
+                .foregroundStyle(emphasised ? .white : .white.opacity(0.70))
+            Spacer()
+            Text(value)
+                .font(.subheadline.weight(emphasised ? .bold : .semibold))
+                .monospacedDigit()
+        }
+        .padding(.vertical, 12)
     }
 }
 
@@ -371,7 +441,14 @@ private struct ProtectedCommitmentRow: View {
 private struct ProtectedFundsSummary: Equatable {
     var balance: Double
     var protected: Double
+    /// Spendable without breaking a hard requirement on any day of the plan.
     var available: Double
+    /// The headline number: spendable while the safety buffer also survives.
+    var safeToSpend: Double
+    var safetyBuffer: Double
+    var futureCommitments: Double
+    var runwayRequestedDate: Date?
+    var runwayEndDate: Date?
     var commitments: [ProtectedCommitment]
     var reserveProtected: Double
 
@@ -379,9 +456,20 @@ private struct ProtectedFundsSummary: Equatable {
         balance: 0,
         protected: 0,
         available: 0,
+        safeToSpend: 0,
+        safetyBuffer: 0,
+        futureCommitments: 0,
+        runwayRequestedDate: nil,
+        runwayEndDate: nil,
         commitments: [],
         reserveProtected: 0
     )
+
+    /// True when the money is not projected to last as long as the user asked.
+    var runwayAtRisk: Bool {
+        guard let requested = runwayRequestedDate, let end = runwayEndDate else { return false }
+        return end <= requested
+    }
 
     var reasonLine: String {
         if let first = commitments.first {
@@ -481,7 +569,7 @@ private struct ProtectedGoalSnapshot: Decodable {
     }
 
     var effectiveFlexibility: GoalFlexibility {
-        flexibility ?? (mustHappen ? .low : .medium)
+        flexibility ?? (mustHappen ? .fixed : .maxDelay(days: 30))
     }
 
     var lifecycleState: GoalLifecycleState {

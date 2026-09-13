@@ -37,7 +37,8 @@ enum AppFinancialData {
         goals: [Goal] = [],
         plannedIncome: [IncomeEvent] = [],
         plannedExpenses: [ExpenseEvent] = [],
-        minimumCashReserve: Double? = nil
+        minimumCashReserve: Double? = nil,
+        cashMustLastUntil: Date? = nil
     ) -> FinancialProfile {
         let asOf = day(Date())
         let usable = transactions.filter {
@@ -85,7 +86,8 @@ enum AppFinancialData {
             expenseEvents: bankExpenses + plannedExpenses,
             goals: goals,
             weeklySpendingHistory: history(usable, asOf),
-            spendingPolicy: SpendingPolicy(lookbackWeeks: 6, bufferWeeks: 2, manualMinimumBuffer: 0)
+            spendingPolicy: SpendingPolicy(lookbackWeeks: 6, bufferWeeks: 2, manualMinimumBuffer: 0),
+            cashMustLastUntil: cashMustLastUntil
         )
 
         return ContextPersistence.applyConfirmedDecisions(to: baseProfile)

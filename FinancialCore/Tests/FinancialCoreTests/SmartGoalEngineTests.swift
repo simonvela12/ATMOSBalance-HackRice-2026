@@ -22,7 +22,7 @@ final class SmartGoalEngineTests: XCTestCase {
         current: Double = 0,
         days: Int = 30,
         priority: GoalPriority = .medium,
-        flexibility: GoalFlexibility = .medium,
+        flexibility: GoalFlexibility = .maxDelay(days: 30),
         state: GoalLifecycleState = .active
     ) -> Goal {
         Goal(name: name, targetAmount: target, amountAlreadyPaid: current,
@@ -126,8 +126,8 @@ final class SmartGoalEngineTests: XCTestCase {
     }
 
     func testConflictingGoalsProtectHigherPriority() throws {
-        let emergency = goal("Emergency", target: 400, priority: .high, flexibility: .low)
-        let laptop = goal("Laptop", target: 300, priority: .low, flexibility: .high)
+        let emergency = goal("Emergency", target: 400, priority: .high, flexibility: .fixed)
+        let laptop = goal("Laptop", target: 300, priority: .low, flexibility: .openEnded)
         let result = try SmartGoalEngine.evaluate(
             profile: profile(cash: 500, goals: [laptop, emergency]), calendar: calendar
         )
@@ -141,8 +141,8 @@ final class SmartGoalEngineTests: XCTestCase {
     }
 
     func testLowFlexibilityWinsWhenPrioritiesMatch() throws {
-        let rigid = goal("Rigid", target: 400, priority: .medium, flexibility: .low)
-        let flexible = goal("Flexible", target: 400, priority: .medium, flexibility: .high)
+        let rigid = goal("Rigid", target: 400, priority: .medium, flexibility: .fixed)
+        let flexible = goal("Flexible", target: 400, priority: .medium, flexibility: .openEnded)
         let result = try SmartGoalEngine.evaluate(
             profile: profile(cash: 500, goals: [flexible, rigid]), calendar: calendar
         )
@@ -152,7 +152,7 @@ final class SmartGoalEngineTests: XCTestCase {
     }
 
     func testFlexibleUnrealisticGoalGetsAlternativeDate() throws {
-        let item = goal(target: 1_000, priority: .low, flexibility: .high)
+        let item = goal(target: 1_000, priority: .low, flexibility: .openEnded)
         let health = try XCTUnwrap(SmartGoalEngine.evaluate(
             profile: profile(cash: 500, goals: [item]), calendar: calendar
         ).goals.first)
@@ -196,7 +196,7 @@ final class SmartGoalEngineTests: XCTestCase {
     }
 
     func testGoalPersistenceContainsInputsButNotDerivedHealth() throws {
-        let item = goal("Persisted", current: 250, priority: .high, flexibility: .low,
+        let item = goal("Persisted", current: 250, priority: .high, flexibility: .fixed,
                         state: .paused)
         let data = try JSONEncoder().encode(item)
         let json = try XCTUnwrap(String(data: data, encoding: .utf8))
@@ -207,7 +207,7 @@ final class SmartGoalEngineTests: XCTestCase {
         XCTAssertFalse(json.contains("status"))
         let decoded = try JSONDecoder().decode(Goal.self, from: data)
         XCTAssertEqual(decoded.priority, .high)
-        XCTAssertEqual(decoded.flexibility, .low)
+        XCTAssertEqual(decoded.flexibility, .fixed)
         XCTAssertEqual(decoded.lifecycleState, .paused)
     }
 }

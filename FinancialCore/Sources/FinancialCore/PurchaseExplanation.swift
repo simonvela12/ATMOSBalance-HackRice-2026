@@ -48,20 +48,14 @@ public extension FinancialInsights {
         )
         let cashAfter = baseline.projectedCash - assessment.purchaseAmount
 
-        // A must-happen goal can constrain a purchase in two equivalent phases:
-        // before its deadline it is protected inside the hard floor; on/after the
-        // deadline it has become a mandatory payment in projected cash. Treat both
-        // as the same user-facing reason: the purchase would consume money already
-        // committed to a protected goal.
-        let protectedGoalFunds = FinancialEngine.protectedMandatoryGoals(
-            profile: profile,
-            on: limitingDate
-        )
+        // A goal binds a purchase on the day it has to be paid, which is where the money
+        // actually leaves the plan. Goals dated after the limiting date are irrelevant to
+        // why *this* date is tight, so only the payments already due there count.
         let dueGoalPayments = FinancialEngine.mandatoryGoalPayments(
             profile: profile,
             targetDate: limitingDate
         )
-        let hasProtectedGoalConstraint = protectedGoalFunds > 0.005 || dueGoalPayments > 0.005
+        let hasProtectedGoalConstraint = dueGoalPayments > 0.005
 
         let reason: PurchaseDecisionReason
         switch assessment.status {
