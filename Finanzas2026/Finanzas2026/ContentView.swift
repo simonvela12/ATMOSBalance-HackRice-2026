@@ -1961,6 +1961,14 @@ private struct FinancialSettingsSheet: View {
         )
     }
 
+    private var selectedAmount: Double {
+        switch mode.wrappedValue {
+        case .automatic: return automaticAmount
+        case .conservative: return conservativeAmount
+        case .custom: return customText.moneyValue ?? 0
+        }
+    }
+
     var body: some View {
         ZStack {
             LinearGradient(colors: MoneyWeather.partlySunny.backgroundColors, startPoint: .topLeading, endPoint: .bottomTrailing)
@@ -1976,19 +1984,22 @@ private struct FinancialSettingsSheet: View {
                         Text(mode.wrappedValue.explanation)
                             .font(.helvetica(.caption))
                             .foregroundStyle(.white.opacity(0.58))
-
-                        VStack(spacing: 0) {
-                            BufferOptionAmount(title: "Auto", detail: "2 weeks", amount: automaticAmount, selected: mode.wrappedValue == .automatic)
-                            Divider().overlay(.white.opacity(0.1))
-                            BufferOptionAmount(title: "Conservative", detail: "4 weeks", amount: conservativeAmount, selected: mode.wrappedValue == .conservative)
-                            Divider().overlay(.white.opacity(0.1))
-                            BufferOptionAmount(title: "Custom", detail: "Your amount", amount: customBuffer, selected: mode.wrappedValue == .custom)
-                        }
-                        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
                     }
-                    if mode.wrappedValue == .custom {
-                        EntryCard(title: "AMOUNT TO PROTECT") {
+
+                    EntryCard(title: "AMOUNT TO PROTECT") {
+                        if mode.wrappedValue == .custom {
                             CurrencyField(text: $customText, placeholder: "500")
+                        } else {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Text(selectedAmount.currencyText)
+                                    .font(.helvetica(size: 38, weight: .semibold))
+                                    .monospacedDigit()
+                                    .contentTransition(.numericText(value: selectedAmount))
+                                Spacer()
+                                Text(mode.wrappedValue == .automatic ? "2 weeks" : "4 weeks")
+                                    .font(.helvetica(.caption, weight: .semibold))
+                                    .foregroundStyle(.white.opacity(0.5))
+                            }
                         }
                     }
                     PrimarySheetButton(title: "Save settings", enabled: mode.wrappedValue != .custom || (customText.moneyValue ?? -1) >= 0) {
@@ -2001,29 +2012,7 @@ private struct FinancialSettingsSheet: View {
             }
         }
         .preferredColorScheme(.dark)
-    }
-}
-
-private struct BufferOptionAmount: View {
-    let title: String
-    let detail: String
-    let amount: Double
-    let selected: Bool
-
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.helvetica(.subheadline, weight: .semibold))
-                Text(detail).font(.helvetica(.caption2)).foregroundStyle(.white.opacity(0.48))
-            }
-            Spacer()
-            Text(amount.currencyText)
-                .font(.helvetica(.subheadline, weight: .bold))
-                .monospacedDigit()
-                .foregroundStyle(selected ? Color.rainMist : .white.opacity(0.66))
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .animation(.easeInOut(duration: 0.2), value: mode.wrappedValue)
     }
 }
 
