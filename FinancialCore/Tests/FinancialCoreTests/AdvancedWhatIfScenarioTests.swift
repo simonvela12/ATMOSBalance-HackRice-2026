@@ -144,7 +144,10 @@ final class AdvancedWhatIfScenarioTests: XCTestCase {
         )
 
         XCTAssertEqual(result.scenarioOutcomes.count, FinancialScenario.allCases.count)
-        XCTAssertEqual(Set(result.scenarioOutcomes.map(\.financialScenario)), Set(FinancialScenario.allCases))
+        XCTAssertEqual(
+            result.scenarioOutcomes.map(\.financialScenario.rawValue).sorted(),
+            FinancialScenario.allCases.map(\.rawValue).sorted()
+        )
         XCTAssertLessThan(result.projected.safeToSpendNow, result.baseline.safeToSpendNow)
         XCTAssertEqual(result.totalExpenses, 2_100, accuracy: 0.001)
         XCTAssertFalse(result.smartGoalImpacts.isEmpty)
