@@ -13,6 +13,7 @@
 		A10000000000000000000004 /* NessieConnectionSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* NessieConnectionSheet.swift */; };
 		A10000000000000000000005 /* FinanceCore in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000002 /* FinanceCore */; };
 		A10000000000000000000006 /* FinancialCore in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000004 /* FinancialCore */; };
+		A10000000000000000000007 /* GeminiWhatIfService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* GeminiWhatIfService.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -21,6 +22,7 @@
 		A20000000000000000000003 /* Finanzas2026.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Finanzas2026.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A20000000000000000000004 /* BankAccountStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BankAccountStore.swift; sourceTree = "<group>"; };
 		A20000000000000000000005 /* NessieConnectionSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NessieConnectionSheet.swift; sourceTree = "<group>"; };
+		A20000000000000000000006 /* GeminiWhatIfService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeminiWhatIfService.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -51,6 +53,7 @@
 				A20000000000000000000002 /* ContentView.swift */,
 				A20000000000000000000004 /* BankAccountStore.swift */,
 				A20000000000000000000005 /* NessieConnectionSheet.swift */,
+				A20000000000000000000006 /* GeminiWhatIfService.swift */,
 			);
 			path = Finanzas2026;
 			sourceTree = "<group>";
@@ -143,6 +146,7 @@
 				A10000000000000000000002 /* ContentView.swift in Sources */,
 				A10000000000000000000003 /* BankAccountStore.swift in Sources */,
 				A10000000000000000000004 /* NessieConnectionSheet.swift in Sources */,
+				A10000000000000000000007 /* GeminiWhatIfService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

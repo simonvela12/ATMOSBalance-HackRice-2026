@@ -123,12 +123,21 @@ struct ContentView: View {
         goalPlanning.spendableBalance
     }
 
+    private var currentFinancialWeather: MoneyWeather? {
+        guard selectedMonth.isCurrent,
+              let assessment = try? FinancialWeatherEngine.assess(profile: goalPlanning.profile) else {
+            return nil
+        }
+        return MoneyWeather(assessment.state)
+    }
+
     private var presentationWeather: MoneyWeather {
+        let monthlyWeather = currentFinancialWeather ?? month.overallWeather
         guard selectedMonth.isCurrent,
               let today = month.days.first(where: { $0.status == .today && $0.amount != 0 }) else {
-            return month.overallWeather
+            return monthlyWeather
         }
-        return MoneyWeather.blended(monthly: month.overallWeather, daily: today.weather)
+        return MoneyWeather.blended(monthly: monthlyWeather, daily: today.weather)
     }
 
     private var presentationConditionTitle: String {
@@ -336,7 +345,7 @@ struct ContentView: View {
 
     private var hero: some View {
         VStack(spacing: 8) {
-            Text(month.month.displayName)
+            Text(selectedMonth.isCurrent ? "Today" : month.month.displayName)
                 .font(.helvetica(.title3, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.82))
 
@@ -676,7 +685,7 @@ struct ContentView: View {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("What if?")
-                        .font(.helvetica(.headline))
+                        .font(.helvetica(.headline, weight: .bold))
                     Text("Preview a purchase or subscription")
                         .font(.helvetica(.caption))
                         .foregroundStyle(.white.opacity(0.58))
@@ -689,24 +698,31 @@ struct ContentView: View {
                     .foregroundStyle(.white.opacity(0.55))
             }
             .foregroundStyle(.white)
-            .padding(.horizontal, 20)
-            .padding(.top, 13)
-            .padding(.bottom, 12)
+            .padding(.horizontal, 17)
+            .padding(.vertical, 13)
             .background {
                 ZStack {
-                    Rectangle().fill(.ultraThinMaterial)
+                    RoundedRectangle(cornerRadius: 17, style: .continuous).fill(.ultraThinMaterial)
                     LinearGradient(
-                        colors: [presentationWeather.primaryColor.opacity(0.16), Color.deepNavy.opacity(0.48)],
-                        startPoint: .leading,
-                        endPoint: .trailing
+                        colors: [
+                            presentationWeather.backgroundColors.first?.opacity(0.88) ?? Color.deepNavy,
+                            presentationWeather.backgroundColors.last?.opacity(0.76) ?? Color.deepNavy
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
                     )
+                    .clipShape(RoundedRectangle(cornerRadius: 17, style: .continuous))
+                    Color.black.opacity(0.10)
+                        .clipShape(RoundedRectangle(cornerRadius: 17, style: .continuous))
                 }
-                .ignoresSafeArea(edges: .bottom)
             }
-            .overlay(alignment: .top) {
-                Rectangle().fill(.white.opacity(0.16)).frame(height: 0.75)
+            .overlay {
+                RoundedRectangle(cornerRadius: 17, style: .continuous)
+                    .stroke(presentationWeather.primaryColor.opacity(0.42), lineWidth: 1)
             }
-            .shadow(color: .black.opacity(0.18), radius: 12, y: -4)
+            .shadow(color: .black.opacity(0.20), radius: 12, y: 4)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 8)
         }
         .buttonStyle(.plain)
     }
@@ -1142,7 +1158,7 @@ private struct GoalsCard: View {
     let onExpand: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
                 Text("GOALS")
                     .font(.helvetica(.caption, weight: .bold))
@@ -1170,9 +1186,6 @@ private struct GoalsCard: View {
                 .buttonStyle(.plain)
             }
 
-            Text("What you’re working toward")
-                .font(.helvetica(.title3, weight: .semibold))
-
             if goals.isEmpty {
                 Button(action: onAdd) {
                     HStack(spacing: 12) {
@@ -1196,7 +1209,7 @@ private struct GoalsCard: View {
                 .buttonStyle(.plain)
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
+                    HStack(spacing: 9) {
                         ForEach(goals) { goal in
                             GoalProgressTile(
                                 goal: goal,
@@ -1212,7 +1225,7 @@ private struct GoalsCard: View {
             }
         }
         .foregroundStyle(.white)
-        .padding(18)
+        .padding(15)
         .background(.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 20, style: .continuous)
@@ -1230,7 +1243,7 @@ private struct GoalProgressTile: View {
     let onComplete: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Image(systemName: goal.symbol)
                     .foregroundStyle(.white.opacity(0.9))
@@ -1307,8 +1320,8 @@ private struct GoalProgressTile: View {
             }
             .buttonStyle(.plain)
         }
-        .padding(14)
-        .frame(width: 230, alignment: .leading)
+        .padding(12)
+        .frame(width: 220, alignment: .leading)
         .background(.white.opacity(0.075), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
@@ -2063,41 +2076,55 @@ private struct WhatIfSheet: View {
     @State private var schedule = EntrySchedule.oneTime
     @State private var repeatEvery = 1
     @State private var repeatUnit = RepeatUnit.month
+    @State private var inputMode = WhatIfInputMode.quick
+    @State private var scenarioText = ""
+    @State private var interpretedScenario: WhatIfScenario?
+    @State private var aiAnalysis: WhatIfScenarioAnalysis?
+    @State private var aiExplanation = ""
+    @State private var aiSources: [GeminiAdviceSource] = []
+    @State private var aiUsedLiveSearch = true
+    @State private var aiError: String?
+    @State private var isAnalyzing = false
 
     private var amount: Double { amountText.moneyValue ?? 0 }
-    private var threeMonthCost: Double {
-        guard schedule == .recurring else { return amount }
-        let occurrences: Double
-        switch repeatUnit {
-        case .day: occurrences = 90 / Double(repeatEvery)
-        case .week: occurrences = 13 / Double(repeatEvery)
-        case .month: occurrences = 3 / Double(repeatEvery)
-        case .year: occurrences = 1
-        }
-        return amount * Double(max(1, Int(occurrences.rounded(.up))))
+    private var planningHorizon: Date {
+        let oneYear = Calendar.current.date(byAdding: .year, value: 1, to: profile.asOfDate) ?? profile.asOfDate
+        return profile.goals.map(\.deadline).max().map { max($0, oneYear) } ?? oneYear
     }
-    private var projectedBalance: Double { accountBalance - threeMonthCost }
+    private var manualScenario: WhatIfScenario? {
+        guard amount > 0 else { return nil }
+        let unit: WhatIfRecurrenceUnit
+        switch repeatUnit {
+        case .day: unit = .day
+        case .week: unit = .week
+        case .month: unit = .month
+        case .year: unit = .year
+        }
+        return WhatIfScenario(
+            title: schedule == .recurring ? "Recurring payment" : "One-time purchase",
+            changes: [WhatIfCashFlowChange(
+                direction: .expense,
+                amount: amount,
+                startDate: profile.asOfDate,
+                recurrence: schedule == .recurring ? WhatIfRecurrence(every: repeatEvery, unit: unit) : nil,
+                label: schedule == .recurring ? "Recurring what-if" : "Purchase what-if"
+            )]
+        )
+    }
+    private var manualAnalysis: WhatIfScenarioAnalysis? {
+        guard let manualScenario else { return nil }
+        return try? FinancialInsights.analyzeWhatIfScenario(profile: profile, scenario: manualScenario, planningHorizon: planningHorizon)
+    }
+    private var activeAnalysis: WhatIfScenarioAnalysis? { inputMode == .quick ? manualAnalysis : aiAnalysis }
     private var currentAllocations: [UUID: Double] {
         GoalAllocation.plan(for: goals, availableBalance: spendableBalance)
     }
     private var projectedAllocations: [UUID: Double] {
-        GoalAllocation.plan(for: goals, availableBalance: spendableBalance - threeMonthCost)
-    }
-    private var advancedImpact: GoalTransactionImpact? {
-        guard amount > 0 else { return nil }
-        let date = schedule == .recurring
-            ? (Calendar.current.date(byAdding: .day, value: 90, to: profile.asOfDate) ?? profile.asOfDate)
-            : profile.asOfDate
-        return try? SmartGoalEngine.impact(
-            of: GoalCashMovement(amount: -threeMonthCost, date: date, label: schedule == .recurring ? "Recurring what-if" : "Purchase what-if"),
-            on: profile
-        )
+        GoalAllocation.plan(for: goals, availableBalance: activeAnalysis?.projected.safeToSpendNow ?? spendableBalance)
     }
     private var resultWeather: MoneyWeather {
-        if projectedBalance >= 1500 { return .partlySunny }
-        if projectedBalance >= 900 { return .cloudy }
-        if projectedBalance >= 300 { return .rain }
-        return .storm
+        guard let status = activeAnalysis?.projected.horizonStatus else { return .cloudy }
+        switch status { case .safe: return .partlySunny; case .tight: return .rain; case .notSafe: return .storm }
     }
 
     var body: some View {
@@ -2107,45 +2134,100 @@ private struct WhatIfSheet: View {
 
             ScrollView {
                 VStack(spacing: 18) {
-                    SheetTitle(eyebrow: "WHAT IF?", title: schedule == .recurring ? "Try a recurring payment" : "Try a purchase", symbol: resultWeather.symbol)
+                    SheetTitle(eyebrow: "WHAT IF?", title: "Explore a financial decision", symbol: resultWeather.symbol)
 
-                    EntryCard(title: "PURCHASE AMOUNT") {
-                        CurrencyField(text: $amountText, placeholder: "80")
+                    Picker("Scenario input", selection: $inputMode) {
+                        Text("Quick amount").tag(WhatIfInputMode.quick)
+                        Text("Ask Gemini").tag(WhatIfInputMode.gemini)
                     }
+                    .pickerStyle(.segmented)
 
-                    EntryCard(title: "TYPE") {
-                        Picker("Payment type", selection: $schedule) {
-                            Text("One-time").tag(EntrySchedule.oneTime)
-                            Text("Recurring").tag(EntrySchedule.recurring)
+                    if inputMode == .quick {
+                        EntryCard(title: "PURCHASE AMOUNT") {
+                            CurrencyField(text: $amountText, placeholder: "80")
                         }
-                        .pickerStyle(.segmented)
 
-                        if schedule == .recurring {
-                            HStack {
-                                Text("Repeat every")
-                                Spacer()
-                                Stepper("\(repeatEvery)", value: $repeatEvery, in: 1...30)
-                                    .fixedSize()
+                        EntryCard(title: "TYPE") {
+                            Picker("Payment type", selection: $schedule) {
+                                Text("One-time").tag(EntrySchedule.oneTime)
+                                Text("Recurring").tag(EntrySchedule.recurring)
                             }
-                            Picker("Frequency", selection: $repeatUnit) {
-                                ForEach(RepeatUnit.allCases) { unit in
-                                    Text(repeatEvery == 1 ? unit.singular : unit.plural).tag(unit)
+                            .pickerStyle(.segmented)
+
+                            if schedule == .recurring {
+                                HStack {
+                                    Text("Repeat every")
+                                    Spacer()
+                                    Stepper("\(repeatEvery)", value: $repeatEvery, in: 1...30).fixedSize()
+                                }
+                                Picker("Frequency", selection: $repeatUnit) {
+                                    ForEach(RepeatUnit.allCases) { unit in
+                                        Text(repeatEvery == 1 ? unit.singular : unit.plural).tag(unit)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                                .tint(.white)
+                            }
+                        }
+                    } else {
+                        EntryCard(title: "DESCRIBE THE SCENARIO") {
+                            TextEditor(text: $scenarioText)
+                                .frame(minHeight: 96)
+                                .scrollContentBackground(.hidden)
+                                .padding(8)
+                                .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                            Text("You can combine events, for example: “$4,000 down today, then $280 monthly, and $500 freelance income in November.”")
+                                .font(.helvetica(.caption))
+                                .foregroundStyle(.white.opacity(0.58))
+                        }
+                        EntryCard(title: "GEMINI CONNECTION") {
+                            Label("Gemini connected for this development build", systemImage: "checkmark.circle.fill")
+                                .font(.helvetica(.subheadline, weight: .semibold))
+                                .foregroundStyle(Color.rainMist)
+                            Text("Gemini interprets and explains. The app's deterministic engine still makes every financial calculation.")
+                                .font(.helvetica(.caption))
+                                .foregroundStyle(.white.opacity(0.58))
+                            Button {
+                                analyzeNaturalLanguageScenario()
+                            } label: {
+                                HStack {
+                                    if isAnalyzing { ProgressView().tint(.white) }
+                                    Text(isAnalyzing ? "Analyzing…" : "Analyze scenario").font(.helvetica(.headline, weight: .bold))
+                                }
+                                .frame(maxWidth: .infinity).padding(.vertical, 12)
+                            }
+                            .buttonStyle(.plain)
+                            .background(.white.opacity(scenarioText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.10 : 0.22), in: RoundedRectangle(cornerRadius: 11))
+                            .disabled(isAnalyzing || scenarioText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            if let aiError { Text(aiError).font(.helvetica(.caption, weight: .semibold)).foregroundStyle(Color.sunGold) }
+                        }
+
+                        if let interpretedScenario {
+                            EntryCard(title: "WHAT GEMINI UNDERSTOOD") {
+                                ForEach(interpretedScenario.changes) { change in
+                                    HStack(alignment: .top) {
+                                        Image(systemName: change.direction == .income ? "arrow.down.circle.fill" : "arrow.up.circle.fill")
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(change.label).font(.helvetica(.subheadline, weight: .semibold))
+                                            Text("\(change.amount.currencyText) · \(change.startDate.formatted(.dateTime.month(.abbreviated).day().year()))\(change.recurrence == nil ? "" : " · Repeats")")
+                                                .font(.helvetica(.caption)).foregroundStyle(.white.opacity(0.6))
+                                        }
+                                        Spacer()
+                                    }
                                 }
                             }
-                            .pickerStyle(.menu)
-                            .tint(.white)
                         }
                     }
 
-                    if amount > 0 {
+                    if let analysis = activeAnalysis {
                         VStack(spacing: 0) {
-                            ScenarioMetric(title: "Balance now", value: accountBalance.currencyText)
+                            ScenarioMetric(title: "Financial health", value: "\(analysis.baseline.horizonStatus.displayText) → \(analysis.projected.horizonStatus.displayText)")
                             Divider().overlay(.white.opacity(0.12))
-                            ScenarioMetric(title: schedule == .recurring ? "Balance after 90 days" : "Balance after purchase", value: projectedBalance.currencyText)
-                            if schedule == .recurring {
-                                Divider().overlay(.white.opacity(0.12))
-                                ScenarioMetric(title: "Estimated 90-day cost", value: threeMonthCost.negativeCurrencyText)
-                            }
+                            ScenarioMetric(title: "Safe to spend", value: "\(analysis.baseline.safeToSpendNow.currencyText) → \(analysis.projected.safeToSpendNow.currencyText)")
+                            Divider().overlay(.white.opacity(0.12))
+                            ScenarioMetric(title: "Future scenario cost", value: analysis.totalExpenses.negativeCurrencyText)
+                            Divider().overlay(.white.opacity(0.12))
+                            ScenarioMetric(title: "Future scenario income", value: analysis.totalIncome.currencyText)
                         }
                         .padding(.horizontal, 16)
                         .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -2166,7 +2248,7 @@ private struct WhatIfSheet: View {
                                     .foregroundStyle(Color.sunGold)
                             }
                             ForEach(goals) { goal in
-                                let impact = advancedImpact?.goalImpacts.first(where: { $0.goal.id == goal.id })
+                                let impact = analysis.smartGoalImpacts.first(where: { $0.goal.id == goal.id })
                                 WhatIfGoalRow(
                                     goal: goal,
                                     currentAllocation: currentAllocations[goal.id] ?? 0,
@@ -2177,8 +2259,38 @@ private struct WhatIfSheet: View {
                         }
                         .padding(16)
                         .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                        EntryCard(title: "RANGE OF OUTCOMES") {
+                            ForEach(analysis.scenarioOutcomes, id: \.financialScenario) { outcome in
+                                HStack {
+                                    Text(outcome.financialScenario.displayText)
+                                    Spacer()
+                                    Text("\(outcome.afterStatus.displayText) · \(outcome.safeToSpendAfter.currencyText)")
+                                        .font(.helvetica(.subheadline, weight: .semibold)).monospacedDigit()
+                                }
+                            }
+                        }
+
+                        if inputMode == .gemini, !aiExplanation.isEmpty {
+                            EntryCard(title: "GEMINI RECOMMENDATION") {
+                                Text(aiExplanation).font(.helvetica(.body)).foregroundStyle(.white.opacity(0.88))
+                            }
+                        }
+
+                        if inputMode == .gemini, aiExplanation.isEmpty, aiAnalysis != nil, !isAnalyzing {
+                            Button {
+                                retryGeminiExplanation()
+                            } label: {
+                                Label("Retry explanation", systemImage: "arrow.clockwise")
+                                    .font(.helvetica(.subheadline, weight: .bold))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                            }
+                            .buttonStyle(.plain)
+                            .background(.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 12))
+                        }
                     } else {
-                        Text("Enter an amount to see the effect on your balance and goals. Nothing here changes your real forecast.")
+                        Text(inputMode == .quick ? "Enter an amount to see the effect across your future balance and goals. Nothing here changes your real forecast." : "Describe a decision to see its combined effect across your cash flow, safety margin, and goals.")
                             .font(.helvetica(.subheadline))
                             .foregroundStyle(.white.opacity(0.62))
                             .multilineTextAlignment(.center)
@@ -2194,13 +2306,85 @@ private struct WhatIfSheet: View {
         .animation(.easeInOut(duration: 0.3), value: schedule)
         .animation(.easeInOut(duration: 0.3), value: resultWeather)
     }
+
+    private func analyzeNaturalLanguageScenario() {
+        isAnalyzing = true
+        aiError = nil
+        aiExplanation = ""
+        aiSources = []
+        aiUsedLiveSearch = true
+        Task {
+            do {
+                let scenario = try await GeminiWhatIfService.interpret(scenarioText, asOfDate: profile.asOfDate, horizon: planningHorizon)
+                let result = try FinancialInsights.analyzeWhatIfScenario(profile: profile, scenario: scenario, planningHorizon: planningHorizon)
+                interpretedScenario = scenario
+                aiAnalysis = result
+                do {
+                    // Gemini's development-tier quotas are commonly request-per-minute based.
+                    // Space interpretation and explanation so the second request is not rejected.
+                    try? await Task.sleep(for: .seconds(13))
+                    let advice = try await GeminiWhatIfService.explain(result)
+                    aiExplanation = advice.text
+                    aiSources = advice.sources
+                    aiUsedLiveSearch = advice.usedLiveSearch
+                }
+                catch {
+                    aiExplanation = localRecommendation(for: result)
+                    aiError = "Gemini is temporarily unavailable, so this recommendation was generated on-device from the completed financial result."
+                }
+            } catch { aiError = error.localizedDescription }
+            isAnalyzing = false
+        }
+    }
+
+    private func retryGeminiExplanation() {
+        guard let result = aiAnalysis else { return }
+        isAnalyzing = true
+        aiError = nil
+        Task {
+            do {
+                let advice = try await GeminiWhatIfService.explain(result)
+                aiExplanation = advice.text
+                aiSources = advice.sources
+                aiUsedLiveSearch = advice.usedLiveSearch
+            } catch {
+                aiExplanation = localRecommendation(for: result)
+                aiError = "Gemini is temporarily unavailable, so this recommendation was generated on-device from the completed financial result."
+            }
+            isAnalyzing = false
+        }
+    }
+
+    private func localRecommendation(for analysis: WhatIfScenarioAnalysis) -> String {
+        let purchase = analysis.totalExpenses
+        let ceiling = analysis.baseline.safeToSpendNow
+        let affectedGoal = analysis.worsenedSmartGoals.first?.goal.name
+        if purchase > ceiling {
+            let goalText = affectedGoal.map { " It would also make your \($0) goal harder to reach." } ?? ""
+            return "This decision asks more from your finances than your current plan comfortably supports.\(goalText) Consider waiting until you have saved more, choosing a lower-cost version, or buying used or refurbished. If it is not urgent, postponing it protects your existing plans without requiring another sacrifice."
+        }
+        if analysis.projected.horizonStatus != .safe {
+            return "You may be able to cover this today, but it leaves too little room for the rest of your plan. Consider delaying it, choosing a cheaper option, or offsetting it by removing another optional expense. That preserves flexibility if an unexpected cost arrives."
+        }
+        return "This fits within the current plan, but it is still worth checking whether you need it now. Waiting for a discount or choosing used, refurbished, or a lower-tier option would preserve more flexibility for your goals and unexpected expenses."
+    }
+}
+
+private enum WhatIfInputMode: Hashable { case quick, gemini }
+
+private extension FinancialHealthStatus {
+    var displayText: String { rawValue.replacingOccurrences(of: "_", with: " ").capitalized }
+}
+
+private extension FinancialScenario {
+    var displayText: String { rawValue.capitalized }
 }
 
 private struct WhatIfGoalRow: View {
     let goal: FinancialGoal
     let currentAllocation: Double
     let projectedAllocation: Double
-    let advancedImpact: GoalMovementImpact?
+    let advancedImpact: WhatIfSmartGoalImpact?
 
     private var allocationLoss: Double { max(0, currentAllocation - projectedAllocation) }
     private var daysUntilGoal: Double {
@@ -3746,6 +3930,16 @@ private enum MoneyWeather: String, CaseIterable {
     case rain
     case storm
 
+    init(_ financialState: FinancialWeatherState) {
+        switch financialState {
+        case .sunny: self = .sunny
+        case .partlySunny: self = .partlySunny
+        case .cloudy: self = .cloudy
+        case .rain: self = .rain
+        case .storm: self = .storm
+        }
+    }
+
     private var comfortIndex: Int {
         switch self {
         case .storm: return 0
@@ -3771,7 +3965,7 @@ private enum MoneyWeather: String, CaseIterable {
         switch self {
         case .sunny: return "Clear"
         case .partlySunny: return "Mostly Clear"
-        case .cloudy: return "A Little Cloudy"
+        case .cloudy: return "Partly Cloudy"
         case .rain: return "Rain Possible"
         case .storm: return "High Pressure"
         }
