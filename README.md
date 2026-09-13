@@ -1,8 +1,18 @@
-# Atmos
+# AtmosBalance
+
+<p align="center">
+  <img src="docs/atmos-balance-logo.jpg" width="280" alt="AtmosBalance logo">
+</p>
 
 **Know what you can spend — before you spend it.**
 
-Atmos is an iOS financial intelligence app built for HackRice 16. Instead of only showing a balance, Atmos combines account activity, upcoming obligations, financial goals, and spending patterns to estimate what a user can safely spend and how a purchase may affect their future.
+AtmosBalance is an iOS financial intelligence app built for HackRice 16. Instead of only showing a balance, AtmosBalance combines account activity, upcoming obligations, financial goals, and spending patterns to estimate what a user can safely spend and how a purchase may affect their future.
+
+## Demo
+
+[![Watch the AtmosBalance demo](https://img.youtube.com/vi/VRIJ04JDxsk/maxresdefault.jpg)](https://www.youtube.com/watch?v=VRIJ04JDxsk)
+
+**[Watch the full demo on YouTube](https://www.youtube.com/watch?v=VRIJ04JDxsk)**
 
 ## HackRice 16
 
@@ -11,7 +21,7 @@ Atmos is an iOS financial intelligence app built for HackRice 16. Instead of onl
 - **Platform:** iOS
 - **Core technologies:** Swift, SwiftUI, Capital One Nessie API, Google Gemini
 
-## What Atmos does
+## What AtmosBalance does
 
 - Aggregates financial account and transaction data
 - Calculates **Available to Spend** after accounting for protected money and upcoming obligations
@@ -46,7 +56,7 @@ The project also contains mock/demo data, so the interface and core financial lo
 
 ## How it works
 
-Atmos separates financial reasoning from AI-generated language. The financial engine performs the calculations that determine balances, protected funds, spending capacity, forecasts, and goal impact. Gemini does **not** decide whether a purchase is affordable; it interprets natural-language scenarios and explains results already produced by the deterministic financial engine.
+AtmosBalance separates financial reasoning from AI-generated language. The financial engine performs the calculations that determine balances, protected funds, spending capacity, forecasts, and goal impact. Gemini does **not** decide whether a purchase is affordable; it interprets natural-language scenarios and explains results already produced by the deterministic financial engine.
 
 Nessie is integrated through a provider layer that imports account and transaction information into the app's financial model. This lets the rest of the product reason over banking data without coupling the financial logic directly to the API implementation.
 
@@ -65,4 +75,4 @@ API credentials are intentionally not required to be committed to the repository
 
 ## Team
 
-Built during HackRice 16 by the Atmos team.
+Built during HackRice 16 by the AtmosBalance team.
