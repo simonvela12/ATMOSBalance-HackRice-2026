@@ -203,6 +203,38 @@ public enum FinancialStateEngine {
         return changes
     }
 
+    /// Compares two states that were already computed, for callers that watch a new
+    /// profile arrive — a bank sync delivering several movements at once — rather than
+    /// applying one known transaction. It answers the same question `apply` does: the
+    /// numbers have already changed, is the change worth showing?
+    public static func materiality(
+        from before: SafeToSpendResult,
+        to after: SafeToSpendResult,
+        netCashMovement: Double,
+        calendar: Calendar = .current
+    ) -> MaterialityDecision {
+        let goalChanges = goalDateChanges(
+            from: before.goalProjections,
+            to: after.goalProjections,
+            calendar: calendar
+        )
+        let runwayShift = runwayShiftInDays(
+            from: before.runway,
+            to: after.runway,
+            calendar: calendar
+        )
+
+        return MaterialityPolicy.transactionImpactDecision(
+            amount: abs(netCashMovement),
+            safeToSpendBefore: before.amount,
+            safeToSpendAfter: after.amount,
+            riskBefore: before.riskState,
+            riskAfter: after.riskState,
+            goalScheduleChanged: goalChanges.contains(where: \.moved),
+            runwayChanged: (runwayShift ?? 0) != 0
+        )
+    }
+
     // MARK: - Derivations
 
     public static func goalDateChanges(

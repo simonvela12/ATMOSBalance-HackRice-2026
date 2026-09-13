@@ -184,7 +184,8 @@ private struct ProtectedFundsBanner: View {
 
         // One engine decides affordability. The banner only renders what it returns:
         // no balance arithmetic happens in SwiftUI.
-        let state = try? SafeToSpendEngine.evaluate(profile: profile, scenario: .conservative)
+        let scenarios = try? SafeToSpendEngine.evaluateAllScenarios(profile: profile)
+        let state = scenarios?.primary
         let available = state?.hardCapacity ?? max(0, profile.currentCash)
         let protected = max(0, profile.currentCash - available)
         let mandatory = engineGoals
@@ -210,6 +211,8 @@ private struct ProtectedFundsBanner: View {
             protected: max(0, protected),
             available: max(0, available),
             safeToSpend: max(0, state?.amount ?? 0),
+            expectedSafeToSpend: max(0, scenarios?.expected.amount ?? 0),
+            optimisticSafeToSpend: max(0, scenarios?.optimistic.amount ?? 0),
             safetyBuffer: max(0, state?.safetyReserve ?? 0),
             futureCommitments: max(0, state?.futureCommitments ?? 0),
             runwayRequestedDate: state?.runway.requestedDate,
@@ -293,6 +296,33 @@ private struct ProtectedFundsDetailSheet: View {
                         )
                     }
                     .padding(.horizontal, 16)
+                    .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("IF THINGS GO...")
+                            .font(.caption.weight(.bold))
+                            .tracking(1.0)
+                            .foregroundStyle(.white.opacity(0.55))
+                            .padding(.top, 14)
+                            .padding(.bottom, 2)
+                        ProtectedBreakdownRow(
+                            title: "Cautiously (recommended)",
+                            value: Self.money.format(summary.safeToSpend),
+                            emphasised: true
+                        )
+                        Divider().overlay(.white.opacity(0.10))
+                        ProtectedBreakdownRow(
+                            title: "As expected",
+                            value: Self.money.format(summary.expectedSafeToSpend)
+                        )
+                        Divider().overlay(.white.opacity(0.10))
+                        ProtectedBreakdownRow(
+                            title: "Well",
+                            value: Self.money.format(summary.optimisticSafeToSpend)
+                        )
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 4)
                     .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
 
                     if let requested = summary.runwayRequestedDate {
@@ -443,8 +473,11 @@ private struct ProtectedFundsSummary: Equatable {
     var protected: Double
     /// Spendable without breaking a hard requirement on any day of the plan.
     var available: Double
-    /// The headline number: spendable while the safety buffer also survives.
+    /// The headline number: spendable while the safety buffer also survives. This is
+    /// the conservative answer, which is what the product recommends by default.
     var safeToSpend: Double
+    var expectedSafeToSpend: Double
+    var optimisticSafeToSpend: Double
     var safetyBuffer: Double
     var futureCommitments: Double
     var runwayRequestedDate: Date?
@@ -457,6 +490,8 @@ private struct ProtectedFundsSummary: Equatable {
         protected: 0,
         available: 0,
         safeToSpend: 0,
+        expectedSafeToSpend: 0,
+        optimisticSafeToSpend: 0,
         safetyBuffer: 0,
         futureCommitments: 0,
         runwayRequestedDate: nil,

@@ -27,6 +27,11 @@ struct ContentView: View {
     @State private var cashMustLastUntil: Date?
     @State private var savingsAllocation: [UUID: Double] = [:]
     @State private var savingsPot: Double = 0
+    /// The last answer shown, kept so a new sync can be compared against it.
+    @State private var lastSafeToSpend: SafeToSpendResult?
+    /// Set only when the recalculation produced something worth reading. Routine
+    /// spending updates the numbers silently.
+    @State private var materialUpdate: String?
 
     /// Rebuilding the profile and the projected path is expensive, and the forecast
     /// views read `month` many times per render, so it is cached and refreshed only
@@ -159,6 +164,26 @@ struct ContentView: View {
             through: AppFinancialData.horizon(from: profile.asOfDate),
             calendar: AppFinancialData.calendar
         )) ?? []
+        let safeToSpend = try? SafeToSpendEngine.evaluateAllScenarios(
+            profile: profile,
+            calendar: AppFinancialData.calendar
+        )
+
+        // The state is recalculated on every change. Whether the user is told about it
+        // is a separate decision, made by the same materiality rules the engine uses.
+        if let previous = lastSafeToSpend, let current = safeToSpend?.primary {
+            let decision = FinancialStateEngine.materiality(
+                from: previous,
+                to: current,
+                netCashMovement: current.totalBalance - previous.totalBalance,
+                calendar: AppFinancialData.calendar
+            )
+            materialUpdate = decision == .ignoreNoImpact
+                ? nil
+                : Self.materialUpdateMessage(from: previous, to: current)
+        }
+        lastSafeToSpend = safeToSpend?.primary
+
         liveContext = LiveFinancialContext(
             profile: profile,
             transactions: bankStore.transactions,
@@ -168,11 +193,33 @@ struct ContentView: View {
                 planningHorizon: horizon,
                 calendar: AppFinancialData.calendar
             ),
-            safeToSpend: try? SafeToSpendEngine.evaluateAllScenarios(
-                profile: profile,
-                calendar: AppFinancialData.calendar
-            )
+            safeToSpend: safeToSpend
         )
+    }
+
+    /// Says what actually moved. Every branch reads a value the engine produced, so
+    /// the sentence can never claim something the numbers do not support.
+    private static func materialUpdateMessage(
+        from previous: SafeToSpendResult,
+        to current: SafeToSpendResult
+    ) -> String {
+        let money = FloatingPointFormatStyle<Double>.Currency(code: "USD")
+            .precision(.fractionLength(0))
+
+        if let moved = current.goalProjections.first(where: { projection in
+            guard let before = previous.goalProjections.first(where: {
+                $0.goal.id == projection.goal.id
+            }) else { return false }
+            return before.projectedDate != projection.projectedDate
+        }) {
+            return "\(moved.goal.name) now lands on \(moved.projectedDate.formatted(.dateTime.month(.abbreviated).day()))."
+        }
+
+        if previous.runway.isSatisfied && !current.runway.isSatisfied {
+            return "Your money is no longer projected to last as long as you asked."
+        }
+
+        return "Safe to spend is now \(money.format(current.amount))."
     }
 
     private var month: MonthForecast {
@@ -227,6 +274,7 @@ struct ContentView: View {
                     } else {
                         topBar
                         hero
+                        materialUpdateBanner
                         goalsSection
                         monthSelector
                             .padding(.top, 16)
@@ -494,6 +542,36 @@ struct ContentView: View {
                     proxy.scrollTo(newMonth.id, anchor: .center)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var materialUpdateBanner: some View {
+        if let materialUpdate {
+            HStack(spacing: 10) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 13, weight: .bold))
+                Text(materialUpdate)
+                    .font(.helvetica(.caption, weight: .semibold))
+                Spacer(minLength: 8)
+                Button {
+                    self.materialUpdate = nil
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .bold))
+                }
+                .buttonStyle(.plain)
+            }
+            .foregroundStyle(.white)
+            .padding(13)
+            .background(.black.opacity(0.22), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.sunGold.opacity(0.45), lineWidth: 0.75)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+            .transition(.opacity)
         }
     }
 
