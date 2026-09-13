@@ -6,7 +6,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A10000000000000000000001 /* Finanzas2026App.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* Finanzas2026App.swift */; };
+		A10000000000000000000001 /* WhatIfAppEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* WhatIfAppEntry.swift */; };
 		A10000000000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* ContentView.swift */; };
 		A10000000000000000000004 /* FinancialCore in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000002 /* FinancialCore */; };
 		A10000000000000000000005 /* BankAccountStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* BankAccountStore.swift */; };
@@ -19,7 +19,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		A20000000000000000000001 /* Finanzas2026App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Finanzas2026App.swift; sourceTree = "<group>"; };
+		A20000000000000000000001 /* WhatIfAppEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhatIfAppEntry.swift; sourceTree = "<group>"; };
 		A20000000000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A20000000000000000000003 /* Finanzas2026.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Finanzas2026.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A20000000000000000000005 /* BankAccountStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BankAccountStore.swift; sourceTree = "<group>"; };
@@ -54,7 +54,7 @@
 		A40000000000000000000002 /* Finanzas2026 */ = {
 			isa = PBXGroup;
 			children = (
-				A20000000000000000000001 /* Finanzas2026App.swift */,
+				A20000000000000000000001 /* WhatIfAppEntry.swift */,
 				A20000000000000000000006 /* ProductRootView.swift */,
 				A20000000000000000000002 /* ContentView.swift */,
 				A20000000000000000000005 /* BankAccountStore.swift */,
@@ -140,7 +140,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A10000000000000000000001 /* Finanzas2026App.swift in Sources */,
+				A10000000000000000000001 /* WhatIfAppEntry.swift in Sources */,
 				A10000000000000000000007 /* ProductRootView.swift in Sources */,
 				A10000000000000000000002 /* ContentView.swift in Sources */,
 				A10000000000000000000005 /* BankAccountStore.swift in Sources */,
