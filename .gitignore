@@ -11,3 +11,4 @@ xcuserdata/
 # Build output
 DerivedData/
 build/
+.build/

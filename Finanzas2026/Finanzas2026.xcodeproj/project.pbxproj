@@ -9,12 +9,18 @@
 /* Begin PBXBuildFile section */
 		A10000000000000000000001 /* Finanzas2026App.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* Finanzas2026App.swift */; };
 		A10000000000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* ContentView.swift */; };
+		A10000000000000000000003 /* BankAccountStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* BankAccountStore.swift */; };
+		A10000000000000000000004 /* NessieConnectionSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* NessieConnectionSheet.swift */; };
+		A10000000000000000000005 /* FinanceCore in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000002 /* FinanceCore */; };
+		A10000000000000000000006 /* FinancialCore in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000004 /* FinancialCore */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		A20000000000000000000001 /* Finanzas2026App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Finanzas2026App.swift; sourceTree = "<group>"; };
 		A20000000000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A20000000000000000000003 /* Finanzas2026.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Finanzas2026.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A20000000000000000000004 /* BankAccountStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BankAccountStore.swift; sourceTree = "<group>"; };
+		A20000000000000000000005 /* NessieConnectionSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NessieConnectionSheet.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -22,6 +28,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A10000000000000000000005 /* FinanceCore in Frameworks */,
+				A10000000000000000000006 /* FinancialCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -41,6 +49,8 @@
 			children = (
 				A20000000000000000000001 /* Finanzas2026App.swift */,
 				A20000000000000000000002 /* ContentView.swift */,
+				A20000000000000000000004 /* BankAccountStore.swift */,
+				A20000000000000000000005 /* NessieConnectionSheet.swift */,
 			);
 			path = Finanzas2026;
 			sourceTree = "<group>";
@@ -69,6 +79,10 @@
 			dependencies = (
 			);
 			name = Finanzas2026;
+			packageProductDependencies = (
+				A00000000000000000000002 /* FinanceCore */,
+				A00000000000000000000004 /* FinancialCore */,
+			);
 			productName = Finanzas2026;
 			productReference = A20000000000000000000003 /* Finanzas2026.app */;
 			productType = "com.apple.product-type.application";
@@ -97,6 +111,10 @@
 				Base,
 			);
 			mainGroup = A40000000000000000000001;
+			packageReferences = (
+				A00000000000000000000001 /* XCLocalSwiftPackageReference "FinanceCore" */,
+				A00000000000000000000003 /* XCLocalSwiftPackageReference "FinancialCore" */,
+			);
 			productRefGroup = A40000000000000000000003 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -123,6 +141,8 @@
 			files = (
 				A10000000000000000000001 /* Finanzas2026App.swift in Sources */,
 				A10000000000000000000002 /* ContentView.swift in Sources */,
+				A10000000000000000000003 /* BankAccountStore.swift in Sources */,
+				A10000000000000000000004 /* NessieConnectionSheet.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -224,6 +244,16 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		A00000000000000000000001 /* XCLocalSwiftPackageReference "FinanceCore" */ = {isa = XCLocalSwiftPackageReference; relativePath = ..; };
+		A00000000000000000000003 /* XCLocalSwiftPackageReference "FinancialCore" */ = {isa = XCLocalSwiftPackageReference; relativePath = ../FinancialCore; };
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A00000000000000000000002 /* FinanceCore */ = {isa = XCSwiftPackageProductDependency; package = A00000000000000000000001 /* XCLocalSwiftPackageReference "FinanceCore" */; productName = FinanceCore; };
+		A00000000000000000000004 /* FinancialCore */ = {isa = XCSwiftPackageProductDependency; package = A00000000000000000000003 /* XCLocalSwiftPackageReference "FinancialCore" */; productName = FinancialCore; };
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = A80000000000000000000001 /* Project object */;
 }

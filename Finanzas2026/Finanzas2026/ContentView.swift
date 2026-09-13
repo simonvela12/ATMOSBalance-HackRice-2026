@@ -1,7 +1,10 @@
 import SwiftUI
 import Charts
+import FinanceCore
+import FinancialCore
 
 struct ContentView: View {
+    @EnvironmentObject private var bankStore: BankAccountStore
     @State private var selectedMonth = ForecastMonth.september
     @State private var selectedDay: ForecastDay?
     @State private var showingAddEntry = false
@@ -9,6 +12,8 @@ struct ContentView: View {
     @State private var showingAddGoal = false
     @State private var showingGoals = false
     @State private var showingSpendableDetails = false
+    @State private var showingBankConnection = false
+    @State private var showingFinancialSettings = false
     @State private var showingCalendar = false
     @State private var showingFullMonth = false
     @State private var addedEntries: [FinancialEntry] = []
@@ -19,6 +24,12 @@ struct ContentView: View {
     @State private var deletedForecastDays: Set<String> = []
     @State private var excludedOccurrences: Set<String> = []
     @State private var occurrenceNameOverrides: [String: String] = [:]
+    @AppStorage("safetyBufferMode") private var safetyBufferModeRaw = SafetyBufferMode.automatic.rawValue
+    @AppStorage("customSafetyBuffer") private var customSafetyBuffer = 0.0
+
+    private var safetyBufferMode: SafetyBufferMode {
+        SafetyBufferMode(rawValue: safetyBufferModeRaw) ?? .automatic
+    }
 
     private var month: MonthForecast {
         MockForecast.data(
@@ -26,7 +37,15 @@ struct ContentView: View {
             including: addedEntries,
             excludingForecastDays: deletedForecastDays,
             excludingOccurrences: excludedOccurrences,
-            occurrenceNameOverrides: occurrenceNameOverrides
+            occurrenceNameOverrides: occurrenceNameOverrides,
+            bank: bankContext
+        )
+    }
+
+    private var bankContext: BankForecastContext {
+        BankForecastContext(
+            accounts: bankStore.accounts,
+            transactions: bankStore.transactions
         )
     }
 
@@ -67,8 +86,20 @@ struct ContentView: View {
         upcomingPaymentActivities.reduce(0) { $0 + $1.amount }
     }
 
+    private var goalPlanning: GoalPlanningSnapshot {
+        GoalPlanningService.snapshot(
+            goals: goals,
+            entries: addedEntries,
+            accounts: bankStore.accounts,
+            transactions: bankStore.transactions,
+            fallbackBalance: month.accountBalance,
+            bufferMode: safetyBufferMode,
+            customBuffer: customSafetyBuffer
+        )
+    }
+
     private var spendableBalance: Double {
-        month.accountBalance - reservedForGoals - reservedForPayments
+        goalPlanning.spendableBalance
     }
 
     private var presentationWeather: MoneyWeather {
@@ -133,14 +164,16 @@ struct ContentView: View {
         .sheet(item: $selectedDay) { day in
             DayDetailSheet(
                 day: day,
+                entries: addedEntries,
                 onRename: renameEntry,
+                onEdit: editEntry,
                 onDelete: deleteEntry
             )
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showingAddEntry) {
-            AddEntrySheet { entry in
+            AddEntrySheet { entry, _ in
                 addedEntries.append(entry)
                 if let visibleMonth = ForecastMonth.containing(entry.startDate) {
                     selectedMonth = visibleMonth
@@ -154,7 +187,8 @@ struct ContentView: View {
             WhatIfSheet(
                 accountBalance: month.accountBalance,
                 spendableBalance: spendableBalance,
-                goals: currentGoals
+                goals: currentGoals,
+                profile: goalPlanning.profile
             )
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
@@ -172,15 +206,16 @@ struct ContentView: View {
             .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showingGoals) {
-            ExpandedGoalsSheet(goals: $goals, accountBalance: month.accountBalance)
+            ExpandedGoalsSheet(goals: $goals, accountBalance: goalPlanning.liquidBalance, planning: goalPlanning)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showingSpendableDetails) {
             SpendableBreakdownSheet(
-                totalBalance: month.accountBalance,
+                totalBalance: goalPlanning.totalBalance,
                 goals: currentGoals,
-                payments: upcomingPaymentActivities
+                payments: upcomingPaymentActivities,
+                planning: goalPlanning
             )
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
@@ -188,7 +223,7 @@ struct ContentView: View {
         .sheet(item: $goalBeingAllocated) { goal in
             AllocateMoneySheet(
                 goal: goal,
-                spendableBalance: max(0, spendableBalance)
+                spendableBalance: max(0, goalPlanning.liquidBalance - (reservedForGoals - goal.saved))
             ) { amount in
                 if let index = goals.firstIndex(where: { $0.id == goal.id }) {
                     goals[index].saved = min(goals[index].targetAmount, max(0, amount))
@@ -218,11 +253,27 @@ struct ContentView: View {
             CalendarForecastSheet(
                 month: month,
                 goals: currentGoals,
+                entries: addedEntries,
                 onRename: renameEntry,
+                onEdit: editEntry,
                 onDelete: deleteEntry
             )
             .presentationDetents([.large])
             .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showingBankConnection) {
+            NessieConnectionSheet()
+                .environmentObject(bankStore)
+        }
+        .sheet(isPresented: $showingFinancialSettings) {
+            FinancialSettingsSheet(
+                modeRaw: $safetyBufferModeRaw,
+                customBuffer: $customSafetyBuffer,
+                automaticAmount: goalPlanning.automaticBuffer,
+                conservativeAmount: goalPlanning.conservativeBuffer
+            )
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
         }
     }
 
@@ -249,20 +300,23 @@ struct ContentView: View {
 
             Spacer()
 
-            Text("DEMO")
-                .font(.helvetica(.caption2, weight: .bold))
-                .tracking(0.8)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(.white.opacity(0.12), in: Capsule())
+            Button { showingFinancialSettings = true } label: {
+                Image(systemName: "gearshape.fill")
+                    .font(.system(size: 16, weight: .semibold))
+                    .frame(width: 34, height: 34)
+                    .background(.white.opacity(0.12), in: Circle())
+            }
+            .accessibilityLabel("Financial settings")
 
-            Button(action: {}) {
+            Button {
+                showingBankConnection = true
+            } label: {
                 Image(systemName: "person.crop.circle.fill")
                     .font(.system(size: 30))
                     .symbolRenderingMode(.hierarchical)
                     .foregroundStyle(.white.opacity(0.92))
             }
-            .accessibilityLabel("Profile")
+            .accessibilityLabel("Bank connection")
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 20)
@@ -280,11 +334,24 @@ struct ContentView: View {
                 .tracking(-4)
                 .lineLimit(1)
                 .minimumScaleFactor(0.65)
+                .foregroundStyle(selectedMonth.isCurrent ? .white : .white.opacity(0.58))
                 .contentTransition(.numericText(value: month.accountBalance))
 
             Text(month.balanceLabel)
                 .font(.helvetica(.title3, weight: .medium))
                 .foregroundStyle(.white.opacity(0.9))
+
+            if !selectedMonth.isCurrent {
+                Label(
+                    selectedMonth.isPast ? "Historical month · not your current bank balance" : "Forecast month · estimated, not your current bank balance",
+                    systemImage: selectedMonth.isPast ? "clock.arrow.circlepath" : "sparkles"
+                )
+                .font(.helvetica(.caption, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.72))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(.black.opacity(0.18), in: Capsule())
+            }
 
             HStack(spacing: 5) {
                 Text("\(spendableBalance.currencyText) spendable")
@@ -351,7 +418,8 @@ struct ContentView: View {
                         including: addedEntries,
                         excludingForecastDays: deletedForecastDays,
                         excludingOccurrences: excludedOccurrences,
-                        occurrenceNameOverrides: occurrenceNameOverrides
+                        occurrenceNameOverrides: occurrenceNameOverrides,
+                        bank: bankContext
                     ).overallWeather
 
                     Button {
@@ -406,17 +474,13 @@ struct ContentView: View {
             .onAppear {
                 proxy.scrollTo(selectedMonth.id, anchor: .center)
             }
-            .onChange(of: selectedMonth) { _, newMonth in
-                withAnimation(.easeInOut(duration: 0.3)) {
-                    proxy.scrollTo(newMonth.id, anchor: .center)
-                }
-            }
         }
     }
 
     private var goalsSection: some View {
         GoalsCard(
             goals: currentGoals,
+            insights: goalPlanning.insights,
             onAdd: {
                 goalBeingEdited = nil
                 showingAddGoal = true
@@ -567,7 +631,8 @@ struct ContentView: View {
             points: MockForecast.balancePoints(
                 including: addedEntries,
                 excludingForecastDays: deletedForecastDays,
-                excludingOccurrences: excludedOccurrences
+                excludingOccurrences: excludedOccurrences,
+                bank: bankContext
             )
         )
             .padding(.horizontal, 20)
@@ -665,6 +730,32 @@ struct ContentView: View {
             }
         case .forecastDay(let dayID):
             deletedForecastDays.insert(dayID)
+        }
+        selectedDay = nil
+    }
+
+    private func editEntry(_ target: ForecastEntryTarget, edited: FinancialEntry, scope: OccurrenceScope) {
+        guard case let .custom(entryID, occurrenceKey, occurrenceDate) = target,
+              let index = addedEntries.firstIndex(where: { $0.id == entryID }) else { return }
+        let original = addedEntries[index]
+        if original.schedule == .recurring {
+            let affectedDates = scope == .onlyThis
+                ? original.occurrenceDates(through: MockForecast.horizon).filter { original.occurrenceKey(for: $0) == occurrenceKey }
+                : original.occurrenceDates(through: MockForecast.horizon).filter { $0 >= occurrenceDate }
+            affectedDates.forEach { excludedOccurrences.insert(original.occurrenceKey(for: $0)) }
+            addedEntries.append(FinancialEntry(
+                id: UUID(), name: edited.name, kind: edited.kind, amount: edited.amount,
+                startDate: occurrenceDate, schedule: scope == .onlyThis ? .oneTime : edited.schedule,
+                repeatEvery: edited.repeatEvery, repeatUnit: edited.repeatUnit,
+                repeatEnding: edited.repeatEnding, occurrenceCount: edited.occurrenceCount, endDate: edited.endDate
+            ))
+        } else {
+            addedEntries[index] = FinancialEntry(
+                id: original.id, name: edited.name, kind: edited.kind, amount: edited.amount,
+                startDate: edited.startDate, schedule: edited.schedule, repeatEvery: edited.repeatEvery,
+                repeatUnit: edited.repeatUnit, repeatEnding: edited.repeatEnding,
+                occurrenceCount: edited.occurrenceCount, endDate: edited.endDate
+            )
         }
         selectedDay = nil
     }
@@ -1030,6 +1121,7 @@ private struct MiniMetric: View {
 
 private struct GoalsCard: View {
     let goals: [FinancialGoal]
+    let insights: [UUID: GoalInsightSnapshot]
     let onAdd: () -> Void
     let onEdit: (FinancialGoal) -> Void
     let onDelete: (FinancialGoal) -> Void
@@ -1096,6 +1188,7 @@ private struct GoalsCard: View {
                         ForEach(goals) { goal in
                             GoalProgressTile(
                                 goal: goal,
+                                insight: insights[goal.id],
                                 onEdit: { onEdit(goal) },
                                 onDelete: { onDelete(goal) },
                                 onAllocate: { onAllocate(goal) },
@@ -1118,6 +1211,7 @@ private struct GoalsCard: View {
 
 private struct GoalProgressTile: View {
     let goal: FinancialGoal
+    let insight: GoalInsightSnapshot?
     let onEdit: () -> Void
     let onDelete: () -> Void
     let onAllocate: () -> Void
@@ -1153,6 +1247,16 @@ private struct GoalProgressTile: View {
             Text(goal.targetDate, format: .dateTime.month(.abbreviated).day().year())
                 .font(.helvetica(.caption2, weight: .medium))
                 .foregroundStyle(.white.opacity(0.48))
+
+            if let insight {
+                HStack(spacing: 6) {
+                    Text(insight.statusTitle)
+                        .foregroundStyle(insight.statusColor)
+                    Text("· \(insight.weekly.currencyText)/week")
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+                .font(.helvetica(.caption2, weight: .semibold))
+            }
 
             ProgressView(value: goal.progress)
                 .tint(goal.priority.color)
@@ -1211,6 +1315,7 @@ private struct PriorityBadge: View {
 private struct ExpandedGoalsSheet: View {
     @Binding var goals: [FinancialGoal]
     let accountBalance: Double
+    let planning: GoalPlanningSnapshot
     @State private var tab = GoalListTab.current
     @State private var editingGoal: FinancialGoal?
     @State private var allocatingGoal: FinancialGoal?
@@ -1246,6 +1351,15 @@ private struct ExpandedGoalsSheet: View {
                     }
                     .pickerStyle(.segmented)
 
+                    if tab == .current, let message = planning.conflictMessage {
+                        Label(message, systemImage: "exclamationmark.triangle.fill")
+                            .font(.helvetica(.caption, weight: .semibold))
+                            .foregroundStyle(Color.sunGold)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(12)
+                            .background(.black.opacity(0.14), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+
                     if visibleGoals.isEmpty {
                         VStack(spacing: 10) {
                             Image(systemName: tab == .current ? "target" : "clock.arrow.circlepath")
@@ -1265,6 +1379,7 @@ private struct ExpandedGoalsSheet: View {
                             ForEach(visibleGoals) { goal in
                                 ExpandedGoalRow(
                                     goal: goal,
+                                    insight: planning.insights[goal.id],
                                     allocation: goal.saved,
                                     onEdit: {
                                         editingGoal = goal
@@ -1336,6 +1451,7 @@ private struct ExpandedGoalsSheet: View {
 
 private struct ExpandedGoalRow: View {
     let goal: FinancialGoal
+    let insight: GoalInsightSnapshot?
     let allocation: Double
     let onEdit: () -> Void
     let onDelete: () -> Void
@@ -1391,6 +1507,35 @@ private struct ExpandedGoalRow: View {
             .font(.helvetica(.caption2, weight: .medium))
             .foregroundStyle(.white.opacity(0.54))
 
+            if let insight, !goal.isCompleted {
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack {
+                        Label(insight.statusTitle, systemImage: insight.statusSymbol)
+                            .foregroundStyle(insight.statusColor)
+                        Spacer()
+                        Text("\(insight.weekly.currencyText)/week")
+                    }
+                    HStack {
+                        Text("Daily \(insight.daily.currencyText)")
+                        Spacer()
+                        Text("Monthly \(insight.monthly.currencyText)")
+                    }
+                    HStack {
+                        Text(insight.fundingDateText)
+                        Spacer()
+                        if insight.shortfall > 0 { Text("Shortfall \(insight.shortfall.currencyText)") }
+                    }
+                    if let alternative = insight.alternativeDateText {
+                        Text("Recommended deadline: \(alternative)")
+                    }
+                    Text(insight.explanation)
+                        .font(.helvetica(size: 10, weight: .regular))
+                        .foregroundStyle(.white.opacity(0.44))
+                }
+                .font(.helvetica(.caption2, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.58))
+            }
+
             if let onAllocate {
                 Button(action: onAllocate) {
                     Label(goal.saved > 0 ? "Manage allocation" : "Allocate money", systemImage: goal.saved > 0 ? "slider.horizontal.3" : "plus.circle.fill")
@@ -1434,6 +1579,8 @@ private struct AddGoalSheet: View {
     @State private var targetDate = Calendar.current.date(byAdding: .month, value: 4, to: MockForecast.todayDate) ?? MockForecast.todayDate
     @State private var symbol = "airplane"
     @State private var priority = GoalPriority.important
+    @State private var flexibility = GoalFlexibility.balanced
+    @State private var isPaused = false
     @State private var isCompleted = false
 
     init(existingGoal: FinancialGoal? = nil, onSave: @escaping (FinancialGoal) -> Void) {
@@ -1444,6 +1591,8 @@ private struct AddGoalSheet: View {
         _targetDate = State(initialValue: existingGoal?.targetDate ?? Calendar.current.date(byAdding: .month, value: 4, to: MockForecast.todayDate) ?? MockForecast.todayDate)
         _symbol = State(initialValue: existingGoal?.symbol ?? "airplane")
         _priority = State(initialValue: existingGoal?.priority ?? .important)
+        _flexibility = State(initialValue: existingGoal?.flexibility ?? .balanced)
+        _isPaused = State(initialValue: existingGoal?.isPaused ?? false)
         _isCompleted = State(initialValue: existingGoal?.isCompleted ?? false)
     }
 
@@ -1489,6 +1638,23 @@ private struct AddGoalSheet: View {
                             .foregroundStyle(.white.opacity(0.58))
                     }
 
+                    EntryCard(title: "PLANNING FLEXIBILITY") {
+                        Picker("Goal flexibility", selection: $flexibility) {
+                            ForEach(GoalFlexibility.allCases) { option in
+                                Text(option.title).tag(option)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        Text(flexibility.explanation)
+                            .font(.helvetica(.caption))
+                            .foregroundStyle(.white.opacity(0.58))
+
+                        if existingGoal != nil {
+                            Toggle("Pause recommendations", isOn: $isPaused)
+                                .tint(Color.rainMist)
+                        }
+                    }
+
                     EntryCard(title: "ICON") {
                         Picker("Goal icon", selection: $symbol) {
                             Label("Travel", systemImage: "airplane").tag("airplane")
@@ -1509,6 +1675,8 @@ private struct AddGoalSheet: View {
                             targetDate: targetDate,
                             symbol: symbol,
                             priority: priority,
+                            flexibility: flexibility,
+                            isPaused: isPaused,
                             isCompleted: isCompleted
                         ))
                         dismiss()
@@ -1572,17 +1740,17 @@ private struct AllocateMoneySheet: View {
                     }
 
                     VStack(spacing: 0) {
-                        ScenarioMetric(title: "Spendable now", value: spendableBalance.currencyText)
+                        ScenarioMetric(title: "Available liquid cash", value: spendableBalance.currencyText)
                         Divider().overlay(.white.opacity(0.12))
                         ScenarioMetric(title: "Currently allocated", value: goal.saved.currencyText)
                         Divider().overlay(.white.opacity(0.12))
-                        ScenarioMetric(title: "Spendable after saving", value: spendableAfterSaving.currencyText)
+                        ScenarioMetric(title: "Liquid cash after allocation", value: spendableAfterSaving.currencyText)
                     }
                     .padding(.horizontal, 16)
                     .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
 
                     if amount > maximumAllocation {
-                        Label("This is more than your available spendable money or the goal target.", systemImage: "exclamationmark.triangle.fill")
+                        Label("This is more than your unallocated liquid cash or the goal target.", systemImage: "exclamationmark.triangle.fill")
                             .font(.helvetica(.caption))
                             .foregroundStyle(Color.sunGold)
                     }
@@ -1611,6 +1779,7 @@ private struct SpendableBreakdownSheet: View {
     let totalBalance: Double
     let goals: [FinancialGoal]
     let payments: [ForecastActivity]
+    let planning: GoalPlanningSnapshot
 
     private var fundedGoals: [FinancialGoal] {
         goals.filter { $0.saved > 0 }
@@ -1625,7 +1794,7 @@ private struct SpendableBreakdownSheet: View {
     }
 
     private var spendableBalance: Double {
-        totalBalance - reservedAmount - reservedPayments
+        planning.spendableBalance
     }
 
     var body: some View {
@@ -1640,16 +1809,30 @@ private struct SpendableBreakdownSheet: View {
                     VStack(spacing: 0) {
                         ScenarioMetric(title: "Total account balance", value: totalBalance.currencyText)
                         Divider().overlay(.white.opacity(0.12))
+                        ScenarioMetric(title: "Liquid account balance", value: planning.liquidBalance.currencyText)
+                        Divider().overlay(.white.opacity(0.12))
                         ScenarioMetric(title: "Goal allocations", value: reservedAmount.negativeCurrencyText)
                         Divider().overlay(.white.opacity(0.12))
                         ScenarioMetric(title: "Upcoming payments", value: reservedPayments.negativeCurrencyText)
+                        if planning.safetyBuffer > 0 {
+                            Divider().overlay(.white.opacity(0.12))
+                            ScenarioMetric(title: "Safety buffer", value: planning.safetyBuffer.negativeCurrencyText)
+                        }
+                        if planning.recommendedContributionTotal > 0 {
+                            Divider().overlay(.white.opacity(0.12))
+                            ScenarioMetric(title: "Recommended goal funding", value: planning.recommendedContributionTotal.negativeCurrencyText)
+                        }
+                        if planning.futureExpensePreparation > 0 {
+                            Divider().overlay(.white.opacity(0.12))
+                            ScenarioMetric(title: "Future expense preparation", value: planning.futureExpensePreparation.negativeCurrencyText)
+                        }
                         Divider().overlay(.white.opacity(0.12))
                         ScenarioMetric(title: "Spendable money", value: spendableBalance.currencyText)
                     }
                     .padding(.horizontal, 16)
                     .background(.black.opacity(0.16), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
 
-                    if fundedGoals.isEmpty && payments.isEmpty {
+                    if fundedGoals.isEmpty && payments.isEmpty && planning.safetyBuffer == 0 && planning.recommendedContributionTotal == 0 && planning.futureExpensePreparation == 0 {
                         Label("Nothing is currently reducing your spendable money.", systemImage: "checkmark.circle")
                             .font(.helvetica(.subheadline))
                             .foregroundStyle(.white.opacity(0.58))
@@ -1682,6 +1865,24 @@ private struct SpendableBreakdownSheet: View {
                                             Text(goal.saved.negativeCurrencyText)
                                                 .font(.helvetica(.subheadline, weight: .bold))
                                                 .monospacedDigit()
+                                        }
+                                        .padding(12)
+                                        .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                    }
+                                }
+                            }
+
+                            if !planning.contributions.isEmpty {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text("NEXT 30 DAYS · RECOMMENDED")
+                                        .font(.helvetica(.caption, weight: .bold))
+                                        .tracking(1.1)
+                                        .foregroundStyle(.white.opacity(0.6))
+                                    ForEach(planning.contributions) { item in
+                                        HStack {
+                                            Text(item.name).font(.helvetica(.subheadline, weight: .semibold))
+                                            Spacer()
+                                            Text(item.amount.negativeCurrencyText).font(.helvetica(.subheadline, weight: .bold))
                                         }
                                         .padding(12)
                                         .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -1722,7 +1923,7 @@ private struct SpendableBreakdownSheet: View {
                         }
                     }
 
-                    Text("Spendable money protects goal allocations and upcoming forecast payments while leaving your total bank balance unchanged.")
+                    Text("Spendable money is liquid cash minus confirmed goal allocations, the safety buffer, every committed future payment, and recommended near-term goal funding. It may be negative when obligations exceed available cash.")
                         .font(.helvetica(.caption))
                         .foregroundStyle(.white.opacity(0.54))
                         .multilineTextAlignment(.center)
@@ -1737,10 +1938,100 @@ private struct SpendableBreakdownSheet: View {
     }
 }
 
+private struct FinancialSettingsSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Binding var modeRaw: String
+    @Binding var customBuffer: Double
+    let automaticAmount: Double
+    let conservativeAmount: Double
+    @State private var customText: String
+
+    init(modeRaw: Binding<String>, customBuffer: Binding<Double>, automaticAmount: Double, conservativeAmount: Double) {
+        _modeRaw = modeRaw
+        _customBuffer = customBuffer
+        self.automaticAmount = automaticAmount
+        self.conservativeAmount = conservativeAmount
+        _customText = State(initialValue: customBuffer.wrappedValue.editingText)
+    }
+
+    private var mode: Binding<SafetyBufferMode> {
+        Binding(
+            get: { SafetyBufferMode(rawValue: modeRaw) ?? .automatic },
+            set: { modeRaw = $0.rawValue }
+        )
+    }
+
+    var body: some View {
+        ZStack {
+            LinearGradient(colors: MoneyWeather.partlySunny.backgroundColors, startPoint: .topLeading, endPoint: .bottomTrailing)
+                .ignoresSafeArea()
+            ScrollView {
+                VStack(spacing: 18) {
+                    SheetTitle(eyebrow: "FINANCIAL SETTINGS", title: "Safety buffer", symbol: "gearshape.fill")
+                    EntryCard(title: "BUFFER STYLE") {
+                        Picker("Safety buffer", selection: mode) {
+                            ForEach(SafetyBufferMode.allCases) { option in Text(option.title).tag(option) }
+                        }
+                        .pickerStyle(.segmented)
+                        Text(mode.wrappedValue.explanation)
+                            .font(.helvetica(.caption))
+                            .foregroundStyle(.white.opacity(0.58))
+
+                        VStack(spacing: 0) {
+                            BufferOptionAmount(title: "Auto", detail: "2 weeks", amount: automaticAmount, selected: mode.wrappedValue == .automatic)
+                            Divider().overlay(.white.opacity(0.1))
+                            BufferOptionAmount(title: "Conservative", detail: "4 weeks", amount: conservativeAmount, selected: mode.wrappedValue == .conservative)
+                            Divider().overlay(.white.opacity(0.1))
+                            BufferOptionAmount(title: "Custom", detail: "Your amount", amount: customBuffer, selected: mode.wrappedValue == .custom)
+                        }
+                        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    }
+                    if mode.wrappedValue == .custom {
+                        EntryCard(title: "AMOUNT TO PROTECT") {
+                            CurrencyField(text: $customText, placeholder: "500")
+                        }
+                    }
+                    PrimarySheetButton(title: "Save settings", enabled: mode.wrappedValue != .custom || (customText.moneyValue ?? -1) >= 0) {
+                        if mode.wrappedValue == .custom { customBuffer = max(0, customText.moneyValue ?? 0) }
+                        dismiss()
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 28)
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+}
+
+private struct BufferOptionAmount: View {
+    let title: String
+    let detail: String
+    let amount: Double
+    let selected: Bool
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.helvetica(.subheadline, weight: .semibold))
+                Text(detail).font(.helvetica(.caption2)).foregroundStyle(.white.opacity(0.48))
+            }
+            Spacer()
+            Text(amount.currencyText)
+                .font(.helvetica(.subheadline, weight: .bold))
+                .monospacedDigit()
+                .foregroundStyle(selected ? Color.rainMist : .white.opacity(0.66))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+    }
+}
+
 private struct WhatIfSheet: View {
     let accountBalance: Double
     let spendableBalance: Double
     let goals: [FinancialGoal]
+    let profile: FinancialProfile
 
     @State private var amountText = ""
     @State private var schedule = EntrySchedule.oneTime
@@ -1765,6 +2056,16 @@ private struct WhatIfSheet: View {
     }
     private var projectedAllocations: [UUID: Double] {
         GoalAllocation.plan(for: goals, availableBalance: spendableBalance - threeMonthCost)
+    }
+    private var advancedImpact: GoalTransactionImpact? {
+        guard amount > 0 else { return nil }
+        let date = schedule == .recurring
+            ? (Calendar.current.date(byAdding: .day, value: 90, to: profile.asOfDate) ?? profile.asOfDate)
+            : profile.asOfDate
+        return try? SmartGoalEngine.impact(
+            of: GoalCashMovement(amount: -threeMonthCost, date: date, label: schedule == .recurring ? "Recurring what-if" : "Purchase what-if"),
+            on: profile
+        )
     }
     private var resultWeather: MoneyWeather {
         if projectedBalance >= 1500 { return .partlySunny }
@@ -1839,10 +2140,12 @@ private struct WhatIfSheet: View {
                                     .foregroundStyle(Color.sunGold)
                             }
                             ForEach(goals) { goal in
+                                let impact = advancedImpact?.goalImpacts.first(where: { $0.goal.id == goal.id })
                                 WhatIfGoalRow(
                                     goal: goal,
                                     currentAllocation: currentAllocations[goal.id] ?? 0,
-                                    projectedAllocation: projectedAllocations[goal.id] ?? 0
+                                    projectedAllocation: projectedAllocations[goal.id] ?? 0,
+                                    advancedImpact: impact
                                 )
                             }
                         }
@@ -1871,13 +2174,17 @@ private struct WhatIfGoalRow: View {
     let goal: FinancialGoal
     let currentAllocation: Double
     let projectedAllocation: Double
+    let advancedImpact: GoalMovementImpact?
 
     private var allocationLoss: Double { max(0, currentAllocation - projectedAllocation) }
     private var daysUntilGoal: Double {
         max(1, Calendar.current.dateComponents([.day], from: MockForecast.todayDate, to: goal.targetDate).day.map(Double.init) ?? 1)
     }
     private var dailyFundingRate: Double { max(18, currentAllocation / daysUntilGoal) }
-    private var delayDays: Int { allocationLoss == 0 ? 0 : Int(ceil(allocationLoss / dailyFundingRate)) }
+    private var delayDays: Int {
+        if let value = advancedImpact?.projectedCompletionDateChangeInDays { return max(0, value) }
+        return allocationLoss == 0 ? 0 : Int(ceil(allocationLoss / dailyFundingRate))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 11) {
@@ -1932,7 +2239,9 @@ private struct ScenarioMetric: View {
 private struct CalendarForecastSheet: View {
     let month: MonthForecast
     let goals: [FinancialGoal]
+    let entries: [FinancialEntry]
     let onRename: (ForecastEntryTarget, String, OccurrenceScope) -> Void
+    let onEdit: (ForecastEntryTarget, FinancialEntry, OccurrenceScope) -> Void
     let onDelete: (ForecastEntryTarget, OccurrenceScope) -> Void
     @State private var selectedDay: ForecastDay?
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 7)
@@ -2021,7 +2330,7 @@ private struct CalendarForecastSheet: View {
         }
         .preferredColorScheme(.dark)
         .sheet(item: $selectedDay) { day in
-            DayDetailSheet(day: day, onRename: onRename, onDelete: onDelete)
+            DayDetailSheet(day: day, entries: entries, onRename: onRename, onEdit: onEdit, onDelete: onDelete)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
@@ -2150,7 +2459,9 @@ private struct PrimarySheetButton: View {
 private struct DayDetailSheet: View {
     @Environment(\.dismiss) private var dismiss
     let day: ForecastDay
+    let entries: [FinancialEntry]
     let onRename: (ForecastEntryTarget, String, OccurrenceScope) -> Void
+    let onEdit: (ForecastEntryTarget, FinancialEntry, OccurrenceScope) -> Void
     let onDelete: (ForecastEntryTarget, OccurrenceScope) -> Void
 
     @State private var editedName = ""
@@ -2158,14 +2469,19 @@ private struct DayDetailSheet: View {
     @State private var editingActivityID: String?
     @State private var showingRenameScope = false
     @State private var showingDeleteScope = false
+    @State private var entryBeingEdited: EditableEntryContext?
 
     init(
         day: ForecastDay,
+        entries: [FinancialEntry],
         onRename: @escaping (ForecastEntryTarget, String, OccurrenceScope) -> Void,
+        onEdit: @escaping (ForecastEntryTarget, FinancialEntry, OccurrenceScope) -> Void,
         onDelete: @escaping (ForecastEntryTarget, OccurrenceScope) -> Void
     ) {
         self.day = day
+        self.entries = entries
         self.onRename = onRename
+        self.onEdit = onEdit
         self.onDelete = onDelete
     }
 
@@ -2223,7 +2539,7 @@ private struct DayDetailSheet: View {
                         DetailRow(
                             icon: "equal",
                             title: "Net movement",
-                            subtitle: "Mock daily total",
+                            subtitle: day.isBankImported ? "Nessie and planned entries" : "Daily total",
                             amount: day.formattedAmount
                         )
                     }
@@ -2255,6 +2571,10 @@ private struct DayDetailSheet: View {
                                                 Label("Recurring", systemImage: "arrow.triangle.2.circlepath")
                                                     .font(.helvetica(.caption2, weight: .medium))
                                                     .foregroundStyle(.white.opacity(0.52))
+                                            } else if activity.isBankImported {
+                                                Label("Imported from Nessie", systemImage: "lock.fill")
+                                                    .font(.helvetica(.caption2, weight: .medium))
+                                                    .foregroundStyle(.white.opacity(0.52))
                                             }
                                         }
                                         Spacer()
@@ -2263,27 +2583,12 @@ private struct DayDetailSheet: View {
                                             .monospacedDigit()
                                     }
 
-                                    if editingActivityID == activity.id {
-                                        TextField("Entry name", text: $editedName)
-                                            .padding(11)
-                                            .background(.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                                    }
-
-                                    HStack(spacing: 10) {
-                                        Button(editingActivityID == activity.id ? "Save name" : "Edit") {
-                                            if editingActivityID == activity.id {
-                                                selectedActivity = activity
-                                                if activity.isRecurring {
-                                                    showingRenameScope = true
-                                                } else {
-                                                    onRename(activity.target, editedName, .onlyThis)
-                                                    dismiss()
-                                                }
-                                            } else {
-                                                selectedActivity = activity
-                                                editedName = activity.name
-                                                editingActivityID = activity.id
-                                            }
+                                    if !activity.isBankImported, let target = activity.target {
+                                        HStack(spacing: 10) {
+                                        Button("Edit") {
+                                            guard case let .custom(entryID, _, occurrenceDate) = target,
+                                                  let entry = entries.first(where: { $0.id == entryID }) else { return }
+                                            entryBeingEdited = EditableEntryContext(entry: entry, target: target, occurrenceDate: occurrenceDate)
                                         }
                                         .buttonStyle(.bordered)
                                         .tint(.white)
@@ -2293,7 +2598,7 @@ private struct DayDetailSheet: View {
                                             if activity.isRecurring {
                                                 showingDeleteScope = true
                                             } else {
-                                                onDelete(activity.target, .onlyThis)
+                                                onDelete(target, .onlyThis)
                                                 dismiss()
                                             }
                                         } label: {
@@ -2301,6 +2606,7 @@ private struct DayDetailSheet: View {
                                         }
                                         .buttonStyle(.bordered)
                                         .tint(Color.stormLavender)
+                                        }
                                     }
                                 }
                                 .padding(14)
@@ -2319,7 +2625,9 @@ private struct DayDetailSheet: View {
                             .padding(14)
                     }
 
-                    Text("This breakdown uses demonstration data and will be replaced by the team’s financial model.")
+                    Text(day.isBankImported
+                         ? "Imported bank activity is stored locally and cannot be edited or deleted."
+                         : "This breakdown uses your planned entries and temporary forecast logic.")
                         .font(.helvetica(.caption))
                         .foregroundStyle(.white.opacity(0.52))
                         .multilineTextAlignment(.center)
@@ -2331,14 +2639,22 @@ private struct DayDetailSheet: View {
             .scrollIndicators(.hidden)
         }
         .preferredColorScheme(.dark)
+        .sheet(item: $entryBeingEdited) { context in
+            AddEntrySheet(existingEntry: context.entry, editingDate: context.occurrenceDate) { edited, scope in
+                onEdit(context.target, edited, scope)
+                dismiss()
+            }
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+        }
         .confirmationDialog("Rename recurring entry", isPresented: $showingRenameScope, titleVisibility: .visible) {
-            if let activity = selectedActivity {
+            if let activity = selectedActivity, let target = activity.target {
                 Button("Only this entry") {
-                    onRename(activity.target, editedName, .onlyThis)
+                    onRename(target, editedName, .onlyThis)
                     dismiss()
                 }
                 Button("All future occurrences") {
-                    onRename(activity.target, editedName, .allFuture)
+                    onRename(target, editedName, .allFuture)
                     dismiss()
                 }
             }
@@ -2347,13 +2663,13 @@ private struct DayDetailSheet: View {
             Text("Choose whether this change applies once or to the recurring series.")
         }
         .confirmationDialog("Delete recurring entry", isPresented: $showingDeleteScope, titleVisibility: .visible) {
-            if let activity = selectedActivity {
+            if let activity = selectedActivity, let target = activity.target {
                 Button("Only this entry", role: .destructive) {
-                    onDelete(activity.target, .onlyThis)
+                    onDelete(target, .onlyThis)
                     dismiss()
                 }
                 Button("All future occurrences", role: .destructive) {
-                    onDelete(activity.target, .allFuture)
+                    onDelete(target, .allFuture)
                     dismiss()
                 }
             }
@@ -2362,6 +2678,13 @@ private struct DayDetailSheet: View {
             Text("Bank activity is protected. This only changes your forecast.")
         }
     }
+}
+
+private struct EditableEntryContext: Identifiable {
+    let id = UUID()
+    let entry: FinancialEntry
+    let target: ForecastEntryTarget
+    let occurrenceDate: Date
 }
 
 private struct DetailRow: View {
@@ -2397,7 +2720,9 @@ private struct DetailRow: View {
 
 private struct AddEntrySheet: View {
     @Environment(\.dismiss) private var dismiss
-    let onSave: (FinancialEntry) -> Void
+    let existingEntry: FinancialEntry?
+    let editingDate: Date?
+    let onSave: (FinancialEntry, OccurrenceScope) -> Void
 
     @State private var entryKind = EntryKind.payment
     @State private var entryName = ""
@@ -2409,7 +2734,24 @@ private struct AddEntrySheet: View {
     @State private var repeatEnding = RepeatEnding.never
     @State private var occurrenceCount = 6
     @State private var endDate = Calendar.current.date(byAdding: .month, value: 6, to: .now) ?? .now
+    @State private var editScope = OccurrenceScope.allFuture
     @FocusState private var amountIsFocused: Bool
+
+    init(existingEntry: FinancialEntry? = nil, editingDate: Date? = nil, onSave: @escaping (FinancialEntry, OccurrenceScope) -> Void) {
+        self.existingEntry = existingEntry
+        self.editingDate = editingDate
+        self.onSave = onSave
+        _entryKind = State(initialValue: existingEntry?.kind ?? .payment)
+        _entryName = State(initialValue: existingEntry?.name ?? "")
+        _amountText = State(initialValue: existingEntry?.amount.editingText ?? "")
+        _entryDate = State(initialValue: editingDate ?? existingEntry?.startDate ?? MockForecast.todayDate)
+        _schedule = State(initialValue: existingEntry?.schedule ?? .oneTime)
+        _repeatEvery = State(initialValue: existingEntry?.repeatEvery ?? 1)
+        _repeatUnit = State(initialValue: existingEntry?.repeatUnit ?? .month)
+        _repeatEnding = State(initialValue: existingEntry?.repeatEnding ?? .never)
+        _occurrenceCount = State(initialValue: existingEntry?.occurrenceCount ?? 6)
+        _endDate = State(initialValue: existingEntry?.endDate ?? Calendar.current.date(byAdding: .month, value: 6, to: .now) ?? .now)
+    }
 
     private var amount: Double? {
         amountText.moneyValue
@@ -2451,11 +2793,11 @@ private struct AddEntrySheet: View {
                 VStack(spacing: 18) {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("NEW ENTRY")
+                            Text(existingEntry == nil ? "NEW ENTRY" : "EDIT ENTRY")
                                 .font(.helvetica(.caption, weight: .bold))
                                 .tracking(1.4)
                                 .foregroundStyle(.white.opacity(0.62))
-                            Text("Add to your forecast")
+                            Text(existingEntry == nil ? "Add to your forecast" : "Update amount and type")
                                 .font(.helvetica(.title2, weight: .bold))
                         }
 
@@ -2552,6 +2894,19 @@ private struct AddEntrySheet: View {
                         }
                     }
 
+                    if existingEntry?.schedule == .recurring {
+                        EntryCard(title: "APPLY CHANGES") {
+                            Picker("Edit scope", selection: $editScope) {
+                                Text("Only this").tag(OccurrenceScope.onlyThis)
+                                Text("This & future").tag(OccurrenceScope.allFuture)
+                            }
+                            .pickerStyle(.segmented)
+                            Text("Past occurrences are never changed.")
+                                .font(.helvetica(.caption))
+                                .foregroundStyle(.white.opacity(0.56))
+                        }
+                    }
+
                     Button {
                         amountIsFocused = false
                         guard let amount, amount > 0 else { return }
@@ -2568,10 +2923,10 @@ private struct AddEntrySheet: View {
                             occurrenceCount: occurrenceCount,
                             endDate: endDate
                         )
-                        onSave(entry)
+                        onSave(entry, existingEntry?.schedule == .recurring ? editScope : .onlyThis)
                         dismiss()
                     } label: {
-                        Text("Add \(entryKind.title.lowercased())")
+                        Text(existingEntry == nil ? "Add \(entryKind.title.lowercased())" : "Save changes")
                             .font(.helvetica(.headline))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 15)
@@ -2706,6 +3061,44 @@ private enum GoalPriority: String, CaseIterable, Identifiable {
     }
 }
 
+private enum GoalFlexibility: String, CaseIterable, Identifiable {
+    case fixed
+    case balanced
+    case flexible
+
+    var id: String { rawValue }
+    var title: String { rawValue.capitalized }
+    var explanation: String {
+        switch self {
+        case .fixed: return "Protect this date strongly when goals compete."
+        case .balanced: return "Balance the target date with your other priorities."
+        case .flexible: return "Suggest a later date when that makes the plan safer."
+        }
+    }
+}
+
+private enum SafetyBufferMode: String, CaseIterable, Identifiable {
+    case automatic
+    case conservative
+    case custom
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .automatic: return "Auto"
+        case .conservative: return "Conservative"
+        case .custom: return "Custom"
+        }
+    }
+    var explanation: String {
+        switch self {
+        case .automatic: return "Protects two weeks of your typical spending."
+        case .conservative: return "Protects four weeks of your typical spending."
+        case .custom: return "Protects the exact amount you choose."
+        }
+    }
+}
+
 private enum GoalListTab: String, CaseIterable, Identifiable {
     case current
     case previous
@@ -2722,6 +3115,8 @@ private struct FinancialGoal: Identifiable {
     let targetDate: Date
     let symbol: String
     let priority: GoalPriority
+    let flexibility: GoalFlexibility
+    var isPaused: Bool
     var isCompleted: Bool
 
     var progress: Double {
@@ -2731,6 +3126,219 @@ private struct FinancialGoal: Identifiable {
 
     var remaining: Double { max(0, targetAmount - saved) }
 
+}
+
+private struct GoalInsightSnapshot {
+    let status: FinancialCore.GoalStatus
+    let daily: Double
+    let weekly: Double
+    let monthly: Double
+    let eta: Date?
+    let shortfall: Double
+    let alternativeDate: Date?
+
+    var statusTitle: String {
+        switch status {
+        case .onTrack: return "On track"
+        case .atRisk: return "At risk"
+        default: return status.rawValue.capitalized
+        }
+    }
+    var statusSymbol: String {
+        switch status {
+        case .ahead, .onTrack, .completed: return "checkmark.circle.fill"
+        case .behind, .atRisk: return "clock.badge.exclamationmark"
+        case .unrealistic: return "exclamationmark.triangle.fill"
+        case .paused: return "pause.circle.fill"
+        }
+    }
+    var statusColor: Color {
+        switch status {
+        case .ahead, .onTrack, .completed: return Color.rainMist
+        case .behind, .atRisk: return Color.sunGold
+        case .unrealistic: return Color.cloudSilver
+        case .paused: return .white.opacity(0.55)
+        }
+    }
+    var fundingDateText: String {
+        guard let eta else { return "Projected funding date needs more data" }
+        if Calendar.current.isDateInToday(eta) { return "Could be funded today" }
+        return "Projected funding: \(eta.formatted(date: .abbreviated, time: .omitted))"
+    }
+    var alternativeDateText: String? {
+        guard let alternativeDate, !Calendar.current.isDateInToday(alternativeDate) else { return nil }
+        return alternativeDate.formatted(date: .abbreviated, time: .omitted)
+    }
+    var explanation: String {
+        "Projection uses your confirmed savings, protected payments, expected income and remaining time."
+    }
+}
+
+private struct GoalContributionSnapshot: Identifiable {
+    let id: UUID
+    let name: String
+    let amount: Double
+}
+
+private struct GoalPlanningSnapshot {
+    let profile: FinancialProfile
+    let insights: [UUID: GoalInsightSnapshot]
+    let totalBalance: Double
+    let liquidBalance: Double
+    let safetyBuffer: Double
+    let automaticBuffer: Double
+    let conservativeBuffer: Double
+    let recommendedContributionTotal: Double
+    let futureExpensePreparation: Double
+    let spendableBalance: Double
+    let contributions: [GoalContributionSnapshot]
+    let conflictMessage: String?
+}
+
+private enum GoalPlanningService {
+    static func snapshot(
+        goals: [FinancialGoal],
+        entries: [FinancialEntry],
+        accounts: [FinancialAccount],
+        transactions: [FinancialTransaction],
+        fallbackBalance: Double,
+        bufferMode: SafetyBufferMode,
+        customBuffer: Double,
+        now: Date = .now
+    ) -> GoalPlanningSnapshot {
+        let calendar = Calendar.current
+        let asOf = calendar.startOfDay(for: now)
+        let horizon = goals.map(\.targetDate).max() ?? (calendar.date(byAdding: .year, value: 1, to: asOf) ?? asOf)
+        var incomes: [IncomeEvent] = []
+        var expenses: [ExpenseEvent] = []
+
+        for entry in entries {
+            for date in entry.occurrenceDates(through: horizon) where date >= asOf {
+                if entry.kind == .income {
+                    incomes.append(IncomeEvent(amount: entry.amount, date: date, source: entry.name, type: entry.schedule == .recurring ? .recurring : .oneTime))
+                } else {
+                    expenses.append(ExpenseEvent(amount: entry.amount, date: date, category: entry.name, essential: true, committed: true))
+                }
+            }
+        }
+
+        let accountSnapshots = accounts.map { account in
+            let raw = Double(account.balanceMinorUnits) / 100
+            let credit = account.accountType == .creditCard
+            return AccountBalanceSnapshot(id: account.id, name: account.name, balance: credit ? -abs(raw) : raw, isLiquid: !credit)
+        }
+        let liquidCash = accountSnapshots.isEmpty
+            ? fallbackBalance
+            : accountSnapshots.filter(\.isLiquid).reduce(0) { $0 + $1.balance }
+
+        let coreGoals = goals.map { goal in
+            FinancialCore.Goal(
+                id: goal.id,
+                name: goal.name,
+                targetAmount: goal.targetAmount,
+                amountAlreadyPaid: goal.saved,
+                deadline: goal.targetDate,
+                priority: corePriority(goal.priority),
+                flexibility: coreFlexibility(goal.flexibility),
+                lifecycleState: goal.isCompleted ? .completed : (goal.isPaused ? .paused : .active)
+            )
+        }
+        let weeklyHistory = spendingHistory(transactions: transactions, asOf: asOf, calendar: calendar)
+        let typicalWeeklySpending = FinancialEngine.median(weeklyHistory.map(\.totalVariableSpending))
+        let automaticBuffer = typicalWeeklySpending * 2
+        let conservativeBuffer = typicalWeeklySpending * 4
+        let bufferPolicy: SpendingPolicy
+        switch bufferMode {
+        case .automatic: bufferPolicy = SpendingPolicy(lookbackWeeks: 6, bufferWeeks: 2)
+        case .conservative: bufferPolicy = SpendingPolicy(lookbackWeeks: 6, bufferWeeks: 4)
+        case .custom: bufferPolicy = SpendingPolicy(lookbackWeeks: 6, bufferWeeks: 0, manualMinimumBuffer: customBuffer)
+        }
+        if incomes.isEmpty {
+            incomes = inferredIncomeEvents(transactions: transactions, asOf: asOf, through: horizon, calendar: calendar)
+        }
+        let profile = FinancialProfile(
+            currentCash: liquidCash,
+            asOfDate: asOf,
+            incomeEvents: incomes,
+            expenseEvents: expenses,
+            goals: coreGoals,
+            weeklySpendingHistory: weeklyHistory,
+            spendingPolicy: bufferPolicy
+        )
+
+        let portfolio = try? SmartGoalEngine.evaluate(profile: profile, planningHorizon: horizon, calendar: calendar)
+        let balance = try? FinancialBalanceEngine.summarize(profile: profile, accountBalances: accountSnapshots, calendar: calendar)
+        let insights = Dictionary(uniqueKeysWithValues: (portfolio?.goals ?? []).map { health in
+            (health.goal.id, GoalInsightSnapshot(status: health.status, daily: health.requiredDailySavings, weekly: health.requiredWeeklySavings, monthly: health.requiredMonthlySavings, eta: health.projectedCompletionDate, shortfall: health.shortfall, alternativeDate: health.recommendedTargetDate))
+        })
+        let allocated = goals.filter { !$0.isCompleted }.reduce(0) { $0 + $1.saved }
+        let total = balance?.totalBalance ?? fallbackBalance
+        let liquid = balance?.liquidAccountBalance ?? fallbackBalance
+        let recommendations = balance?.shortTermGoalContributions.map {
+            GoalContributionSnapshot(id: $0.goalID, name: $0.goalName, amount: $0.recommendedContribution)
+        } ?? []
+        let recommendedTotal = balance?.additionalGoalContributionTotal ?? 0
+        let futureExpensePreparation = futureExpenseReserve(expenses: expenses, asOf: asOf, calendar: calendar)
+        let computedSpendable = (balance?.liquidBalanceAfterGoalPlan ?? liquid) - allocated - futureExpensePreparation
+        let conflictMessage: String?
+        if let delayedID = portfolio?.recommendedGoalToDelayID,
+           let delayed = goals.first(where: { $0.id == delayedID }) {
+            conflictMessage = "Goals compete for available money. Consider moving \(delayed.name) to a later date."
+        } else { conflictMessage = nil }
+
+        return GoalPlanningSnapshot(profile: profile, insights: insights, totalBalance: total, liquidBalance: liquid, safetyBuffer: balance?.safetyBuffer ?? 0, automaticBuffer: automaticBuffer, conservativeBuffer: conservativeBuffer, recommendedContributionTotal: recommendedTotal, futureExpensePreparation: futureExpensePreparation, spendableBalance: computedSpendable, contributions: recommendations, conflictMessage: conflictMessage)
+    }
+
+    private static func corePriority(_ priority: GoalPriority) -> FinancialCore.GoalPriority {
+        switch priority {
+        case .essential: return .mandatory
+        case .important: return .medium
+        case .flexible: return .flexible
+        }
+    }
+
+    private static func coreFlexibility(_ flexibility: GoalFlexibility) -> FinancialCore.GoalFlexibility {
+        switch flexibility {
+        case .fixed: return .low
+        case .balanced: return .medium
+        case .flexible: return .high
+        }
+    }
+
+    private static func spendingHistory(transactions: [FinancialTransaction], asOf: Date, calendar: Calendar) -> [WeeklySpendingSample] {
+        let currentWeek = calendar.dateInterval(of: .weekOfYear, for: asOf)?.start ?? asOf
+        return (1...6).compactMap { weeksAgo in
+            guard let week = calendar.date(byAdding: .weekOfYear, value: -weeksAgo, to: currentWeek),
+                  let nextWeek = calendar.date(byAdding: .weekOfYear, value: 1, to: week) else { return nil }
+            let total = transactions
+                .filter { $0.direction == .outflow && !$0.isTransfer && $0.transactionDate >= week && $0.transactionDate < nextWeek }
+                .reduce(0) { $0 + Double($1.amountMinorUnits) / 100 }
+            return WeeklySpendingSample(weekStart: week, totalVariableSpending: total)
+        }
+    }
+
+    private static func futureExpenseReserve(expenses: [ExpenseEvent], asOf: Date, calendar: Calendar) -> Double {
+        let nearTermEnd = calendar.date(byAdding: .day, value: 30, to: asOf) ?? asOf
+        return expenses
+            .filter { $0.committed && $0.date > nearTermEnd }
+            .reduce(0) { $0 + $1.amount }
+    }
+
+    private static func inferredIncomeEvents(transactions: [FinancialTransaction], asOf: Date, through horizon: Date, calendar: Calendar) -> [IncomeEvent] {
+        let start = calendar.date(byAdding: .day, value: -42, to: asOf) ?? asOf
+        let inflows = transactions.filter { $0.direction == .inflow && !$0.isTransfer && $0.transactionDate >= start && $0.transactionDate < asOf }
+        guard !inflows.isEmpty else { return [] }
+        let weeklyAverage = inflows.reduce(0) { $0 + Double($1.amountMinorUnits) / 100 } / 6
+        guard weeklyAverage > 0.005 else { return [] }
+        var result: [IncomeEvent] = []
+        var date = calendar.date(byAdding: .day, value: 7, to: asOf) ?? asOf
+        while date <= horizon {
+            result.append(IncomeEvent(amount: weeklyAverage, date: date, source: "Estimated recurring bank income", type: .irregular, confidence: 0.8))
+            guard let next = calendar.date(byAdding: .day, value: 7, to: date) else { break }
+            date = next
+        }
+        return result
+    }
 }
 
 private enum GoalAllocation {
@@ -2812,7 +3420,7 @@ private struct EntryOccurrence {
     let displayName: String
 }
 
-private enum OccurrenceScope {
+private enum OccurrenceScope: Hashable {
     case onlyThis
     case allFuture
 }
@@ -3140,7 +3748,8 @@ private struct ForecastActivity: Identifiable {
     let kind: EntryKind
     let amount: Double
     let isRecurring: Bool
-    let target: ForecastEntryTarget
+    let target: ForecastEntryTarget?
+    let isBankImported: Bool
 
     var signedAmount: Double { kind == .income ? amount : -amount }
 }
@@ -3178,15 +3787,123 @@ private struct BalancePoint: Identifiable {
     let isAnchor: Bool
 }
 
+private struct BankForecastContext {
+    let accounts: [FinanceCore.FinancialAccount]
+    let transactions: [FinanceCore.FinancialTransaction]
+
+    static let empty = BankForecastContext(accounts: [], transactions: [])
+
+    private var calendar: Calendar {
+        var value = Calendar(identifier: .gregorian)
+        value.timeZone = TimeZone(secondsFromGMT: 0)!
+        return value
+    }
+
+    private var liquidAccountIDs: Set<String> {
+        Set(accounts.filter { $0.accountType != .creditCard }.map(\.externalAccountID))
+    }
+
+    private var settledTransactions: [FinanceCore.FinancialTransaction] {
+        transactions.filter { !$0.isPending && !$0.isTransfer }
+    }
+
+    private var settledLiquidTransactions: [FinanceCore.FinancialTransaction] {
+        settledTransactions.filter { liquidAccountIDs.contains($0.externalAccountID) }
+    }
+
+    var hasData: Bool { !accounts.isEmpty }
+
+    var currentBalance: Double {
+        Double(
+            accounts
+                .filter { $0.accountType != .creditCard }
+                .reduce(Int64(0)) { $0 + $1.balanceMinorUnits }
+        ) / 100
+    }
+
+    func balance(asOf cutoff: Date, today: Date) -> Double? {
+        guard hasData else { return nil }
+        let cutoffDay = calendar.startOfDay(for: cutoff)
+        let todayDay = calendar.startOfDay(for: today)
+        guard cutoffDay < todayDay else { return currentBalance }
+
+        let movementAfterCutoff = settledLiquidTransactions
+            .filter {
+                let transactionDay = calendar.startOfDay(for: $0.transactionDate)
+                return transactionDay > cutoffDay && transactionDay <= todayDay
+            }
+            .reduce(Int64(0)) { $0 + $1.signedAmountMinorUnits }
+        return currentBalance - Double(movementAfterCutoff) / 100
+    }
+
+    func activities(on date: Date) -> [ForecastActivity] {
+        let day = calendar.startOfDay(for: date)
+        return settledTransactions
+            .filter { calendar.startOfDay(for: $0.transactionDate) == day }
+            .sorted {
+                if $0.amountMinorUnits == $1.amountMinorUnits { return $0.id < $1.id }
+                return $0.amountMinorUnits > $1.amountMinorUnits
+            }
+            .map { transaction in
+                let rawName = transaction.merchantName ?? transaction.transactionDescription
+                let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+                return ForecastActivity(
+                    id: "nessie-\(transaction.id)",
+                    name: name.isEmpty ? "Bank transaction" : name,
+                    date: transaction.transactionDate,
+                    kind: transaction.direction == .inflow ? .income : .payment,
+                    amount: Double(transaction.amountMinorUnits) / 100,
+                    isRecurring: false,
+                    target: nil,
+                    isBankImported: true
+                )
+            }
+    }
+
+    func balancePoints(today: Date) -> [BalancePoint] {
+        guard hasData else { return [] }
+        let todayDay = calendar.startOfDay(for: today)
+        let settled = settledLiquidTransactions
+            .filter { calendar.startOfDay(for: $0.transactionDate) <= todayDay }
+            .sorted {
+                if $0.transactionDate == $1.transactionDate { return $0.id < $1.id }
+                return $0.transactionDate < $1.transactionDate
+            }
+        var runningBalance = currentBalance - Double(
+            settled.reduce(Int64(0)) { $0 + $1.signedAmountMinorUnits }
+        ) / 100
+        var points = settled.map { transaction -> BalancePoint in
+            runningBalance += Double(transaction.signedAmountMinorUnits) / 100
+            return BalancePoint(
+                id: "nessie-balance-\(transaction.id)",
+                date: transaction.transactionDate,
+                balance: runningBalance,
+                series: .actual,
+                isAnchor: true
+            )
+        }
+        points.append(
+            BalancePoint(
+                id: "nessie-balance-current",
+                date: todayDay,
+                balance: currentBalance,
+                series: .actual,
+                isAnchor: true
+            )
+        )
+        return points
+    }
+}
+
 private enum MockForecast {
-    static let todayDate = makeDate(year: 2026, month: 9, day: 11)
+    static var todayDate: Date { Calendar(identifier: .gregorian).startOfDay(for: Date()) }
     static let horizon = makeDate(year: 2027, month: 9, day: 30)
-    static let balancePoints: [BalancePoint] = []
 
     static func balancePoints(
         including entries: [FinancialEntry],
         excludingForecastDays: Set<String> = [],
-        excludingOccurrences: Set<String> = []
+        excludingOccurrences: Set<String> = [],
+        bank: BankForecastContext = .empty
     ) -> [BalancePoint] {
         let occurrences = entryOccurrences(
             for: entries,
@@ -3196,7 +3913,8 @@ private enum MockForecast {
         )
         let deletedAdjustments = forecastDeletionAdjustments(for: excludingForecastDays)
 
-        let adjustedBasePoints = Self.balancePoints.map { point in
+        let basePoints = bank.balancePoints(today: todayDate)
+        let adjustedBasePoints = basePoints.map { point in
             let adjustment = occurrences
                 .filter { $0.date <= point.date }
                 .reduce(0) { $0 + $1.entry.signedAmount }
@@ -3215,9 +3933,9 @@ private enum MockForecast {
 
         let entryPoints = occurrences.compactMap { occurrence -> BalancePoint? in
             guard occurrence.date >= makeDate(year: 2026, month: 5, day: 1) else { return nil }
-            let baseBalance = Self.balancePoints
+            let baseBalance = basePoints
                 .filter { $0.date <= occurrence.date }
-                .last?.balance ?? Self.balancePoints.first?.balance ?? 0
+                .last?.balance ?? basePoints.first?.balance ?? bank.currentBalance
             let adjustment = occurrences
                 .filter { $0.date <= occurrence.date }
                 .reduce(0) { $0 + $1.entry.signedAmount }
@@ -3245,7 +3963,8 @@ private enum MockForecast {
         including entries: [FinancialEntry] = [],
         excludingForecastDays: Set<String> = [],
         excludingOccurrences: Set<String> = [],
-        occurrenceNameOverrides: [String: String] = [:]
+        occurrenceNameOverrides: [String: String] = [:],
+        bank: BankForecastContext = .empty
     ) -> MonthForecast {
         let balanceLabel: String
         if month.isPast {
@@ -3282,86 +4001,49 @@ private enum MockForecast {
             calendar.component(.year, from: $0.date) == month.year &&
             calendar.component(.month, from: $0.date) == month.monthNumber
         }
-        let addedSpending = monthOccurrences
-            .filter { $0.entry.kind == .payment }
-            .reduce(0) { $0 + $1.entry.amount }
-        let removedSpending = (1...month.dayCount)
-            .filter { excludingForecastDays.contains("\(month.rawValue)-\($0)") }
-            .map { mockAmount(month: month, day: $0) }
-            .filter { $0 < 0 }
-            .reduce(0) { $0 + abs($1) }
-        let adjustedBalance = balanceAdjustment
-        let adjustedWeather = entries.isEmpty ? MoneyWeather.cloudy : comfortWeather(for: outlookAdjustment)
+        let adjustedBalance = (bank.balance(asOf: balanceCutoff, today: todayDate) ?? 0) + balanceAdjustment
+        let outlookBalance = (bank.balance(asOf: monthEnd, today: todayDate) ?? 0) + outlookAdjustment
+        let hasData = bank.hasData || !entries.isEmpty
+        let adjustedWeather = hasData ? comfortWeather(for: outlookBalance) : MoneyWeather.cloudy
+        let days = makeDays(
+            for: month,
+            occurrences: monthOccurrences,
+            excludingForecastDays: excludingForecastDays,
+            bank: bank
+        )
+        let totalSpending = days.reduce(0) { $0 + $1.expenses }
 
         return MonthForecast(
             month: month,
             accountBalance: adjustedBalance,
             balanceLabel: balanceLabel,
             overallWeather: adjustedWeather,
-            conditionTitle: entries.isEmpty ? "No Data Yet" : conditionTitle(for: adjustedWeather),
-            summary: "Connect a bank account or add an entry to begin your financial forecast.",
-            averageDailySpending: max(
-                0,
-                Double(addedSpending - removedSpending) / Double(month.dayCount)
-            ),
+            conditionTitle: hasData ? conditionTitle(for: adjustedWeather) : "No Data Yet",
+            summary: bank.hasData
+                ? "Updated from your linked Nessie accounts and planned entries."
+                : "Connect a bank account or add an entry to begin your financial forecast.",
+            averageDailySpending: max(0, totalSpending / Double(month.dayCount)),
             previousMonthDelta: 0,
             allTimeDelta: 0,
-            days: makeDays(
-                for: month,
-                occurrences: monthOccurrences,
-                excludingForecastDays: excludingForecastDays
-            )
+            days: days
         )
     }
 
     private static func makeDays(
         for month: ForecastMonth,
         occurrences: [EntryOccurrence] = [],
-        excludingForecastDays: Set<String> = []
+        excludingForecastDays: Set<String> = [],
+        bank: BankForecastContext = .empty
     ) -> [ForecastDay] {
         (1...month.dayCount).map { day in
+            let date = makeDate(year: month.year, month: month.monthNumber, day: day)
             let matchingEntries = occurrences.filter {
                 Calendar.current.component(.day, from: $0.date) == day
             }
-            let customAmount = matchingEntries.reduce(0) { $0 + $1.entry.signedAmount }
+            let bankActivities = bank.activities(on: date)
             let dayID = "\(month.rawValue)-\(day)"
-            let originalBaseAmount = mockAmount(month: month, day: day)
-            let baseAmount = excludingForecastDays.contains(dayID) ? 0 : originalBaseAmount
-            let amount = baseAmount + customAmount
-            let weather = weather(for: amount)
             let status = status(for: month, day: day)
-            let routineSpending = Double(18 + ((day * 7) % 38))
-            let baseIncome = baseAmount > 0 ? baseAmount + routineSpending : 0
-            let baseExpenses = baseAmount > 0 ? routineSpending : abs(baseAmount)
-            let income = baseIncome + matchingEntries
-                .filter { $0.entry.kind == .income }
-                .reduce(0) { $0 + $1.entry.amount }
-            let expenses = baseExpenses + matchingEntries
-                .filter { $0.entry.kind == .payment }
-                .reduce(0) { $0 + $1.entry.amount }
-            let entryTitle: String?
-            if matchingEntries.count == 1 && baseAmount == 0 {
-                entryTitle = matchingEntries[0].displayName
-            } else if !matchingEntries.isEmpty {
-                entryTitle = "\(matchingEntries.count + (baseAmount == 0 ? 0 : 1)) entries"
-            } else {
-                entryTitle = nil
-            }
-            let customNames = matchingEntries.map(\.displayName).joined(separator: ", ")
-            let entryTarget: ForecastEntryTarget?
-            if matchingEntries.count == 1 {
-                entryTarget = .custom(
-                    entryID: matchingEntries[0].entry.id,
-                    occurrenceKey: matchingEntries[0].key,
-                    occurrenceDate: matchingEntries[0].date
-                )
-            } else if status == .forecast && baseAmount != 0 {
-                entryTarget = .forecastDay(dayID: dayID)
-            } else {
-                entryTarget = nil
-            }
-            let isRecurring = matchingEntries.contains { $0.entry.schedule == .recurring } || baseAmount == -620
-            let activities = matchingEntries.map { occurrence in
+            let customActivities = matchingEntries.map { occurrence in
                 ForecastActivity(
                     id: occurrence.key,
                     name: occurrence.displayName,
@@ -3373,9 +4055,39 @@ private enum MockForecast {
                         entryID: occurrence.entry.id,
                         occurrenceKey: occurrence.key,
                         occurrenceDate: occurrence.date
-                    )
+                    ),
+                    isBankImported: false
                 )
             }
+            let activities = bankActivities + customActivities
+            let income = activities
+                .filter { $0.kind == .income }
+                .reduce(0) { $0 + $1.amount }
+            let expenses = activities
+                .filter { $0.kind == .payment }
+                .reduce(0) { $0 + $1.amount }
+            let amount = income - expenses
+            let weather = weather(for: amount)
+            let entryTitle: String?
+            if activities.count == 1 {
+                entryTitle = activities[0].name
+            } else if !activities.isEmpty {
+                entryTitle = "\(activities.count) entries"
+            } else {
+                entryTitle = nil
+            }
+            let entryTarget: ForecastEntryTarget?
+            if matchingEntries.count == 1 {
+                entryTarget = .custom(
+                    entryID: matchingEntries[0].entry.id,
+                    occurrenceKey: matchingEntries[0].key,
+                    occurrenceDate: matchingEntries[0].date
+                )
+            } else {
+                entryTarget = nil
+            }
+            let incomeNames = activities.filter { $0.kind == .income }.map(\.name).joined(separator: ", ")
+            let expenseNames = activities.filter { $0.kind == .payment }.map(\.name).joined(separator: ", ")
 
             return ForecastDay(
                 id: dayID,
@@ -3387,13 +4099,13 @@ private enum MockForecast {
                 status: status,
                 income: income,
                 expenses: expenses,
-                incomeSource: matchingEntries.contains(where: { $0.entry.kind == .income }) ? customNames : (income == 0 ? "Nothing scheduled" : (income >= 300 ? "Campus job deposit" : "Transfer or side income")),
-                expenseSource: matchingEntries.contains(where: { $0.entry.kind == .payment }) ? customNames : (expenses == 0 ? "Nothing scheduled" : (expenses >= 300 ? "Rent and scheduled bills" : "Dining, transit, and daily spending")),
+                incomeSource: income == 0 ? "Nothing scheduled" : incomeNames,
+                expenseSource: expenses == 0 ? "Nothing scheduled" : expenseNames,
                 entryTitle: entryTitle,
                 entryTarget: entryTarget,
                 activities: activities,
-                isRecurring: isRecurring,
-                isBankImported: status != .forecast && matchingEntries.isEmpty
+                isRecurring: matchingEntries.contains { $0.entry.schedule == .recurring },
+                isBankImported: !bankActivities.isEmpty
             )
         }
     }
@@ -3458,8 +4170,9 @@ private enum MockForecast {
     private static func status(for month: ForecastMonth, day: Int) -> DayStatus {
         if month.isPast { return .recorded }
         if month.isCurrent {
-            if day < 11 { return .recorded }
-            if day == 11 { return .today }
+            let currentDay = Calendar(identifier: .gregorian).component(.day, from: Date())
+            if day < currentDay { return .recorded }
+            if day == currentDay { return .today }
         }
         return .forecast
     }
