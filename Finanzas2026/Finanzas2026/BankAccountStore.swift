@@ -49,6 +49,10 @@ final class BankAccountStore: ObservableObject {
     var canRefresh: Bool { !syncServices.isEmpty }
     var importedTransferCount: Int { transactions.lazy.filter(\.isTransfer).count }
 
+    /// True when the last sync completed but at least one account could not be
+    /// read in full, so the balances shown may be missing history.
+    var hasPartialSync: Bool { lastSyncResult?.isPartial ?? false }
+
     var totalAvailableCash: Double {
         Double(
             accounts

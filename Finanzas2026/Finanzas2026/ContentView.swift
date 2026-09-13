@@ -1920,6 +1920,7 @@ private struct AccountsSheet: View {
         switch bankStore.phase {
         case .connecting: return "Syncing with your bank now."
         case .loadingCache: return "Loading saved bank data."
+        case .cached: return "Showing saved bank data. Link again to refresh."
         case .failed(let message): return message
         case .connected:
             if bankStore.hasPartialSync {

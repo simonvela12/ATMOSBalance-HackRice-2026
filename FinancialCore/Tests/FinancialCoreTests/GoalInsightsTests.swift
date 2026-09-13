@@ -41,8 +41,21 @@ final class GoalInsightsTests: XCTestCase {
         XCTAssertTrue(result.includedInBaseline)
         XCTAssertEqual(result.shortfallToHardFloor, 200, accuracy: 0.001)
         XCTAssertEqual(result.shortfallToRecommendedFloor, 300, accuracy: 0.001)
-        XCTAssertEqual(result.tightestDate, date(2026, 10, 1))
+        // Must-happen goals are protected from the as-of date onward, so the
+        // shortfall is already real today rather than appearing on the deadline.
+        XCTAssertEqual(result.tightestDate, asOf)
+        XCTAssertEqual(result.effectiveDeadline, date(2026, 10, 1))
         XCTAssertNil(result.recommendedDate)
+
+        // The same shortfall must still hold on the deadline, when the protected
+        // goal converts into a mandatory payment. Protection must not double count.
+        let atDeadline = try FinancialEngine.forecast(
+            profile: profile,
+            targetDate: date(2026, 10, 1),
+            calendar: calendar
+        )
+        XCTAssertEqual(atDeadline.hardHeadroom, -200, accuracy: 0.001)
+        XCTAssertEqual(atDeadline.recommendedHeadroom, -300, accuracy: 0.001)
     }
 
     func testFlexibleGoalAdaptsWhenNormalSpendingRises() throws {
