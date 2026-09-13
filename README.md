@@ -77,7 +77,7 @@ API credentials are intentionally not required to be committed to the repository
 
 Built during HackRice 16 by:
 
-- Simon Velandia
 - Carlos Gonzalez
 - Lucas Chini Ferrari
 - Marc Alcolea
+- Simon Velandia
